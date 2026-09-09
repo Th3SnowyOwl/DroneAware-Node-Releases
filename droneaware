@@ -1352,6 +1352,9 @@ cmd_refresh() {
     echo "  (WiFi adapters, GPS protocol, gpsd conflict, NM config, service topology)"
     echo ""
     migrate_config_env
+    # Fetch anything this version ships that the node has not got yet. Safe to
+    # call every time: each item is skipped when already present.
+    _ensure_webui_current
     echo ""
     info "Refresh complete."
     echo ""
@@ -1366,6 +1369,102 @@ cmd_refresh() {
     fi
     echo ""
 }
+
+# Assets the Web UI needs that are not the feeders themselves. Split out and
+# called from BOTH update paths on purpose.
+#
+# 🚨 A node upgrading INTO the release that introduces an asset runs the OLD
+# CLI for the whole update — the new CLI is installed at the end, and the
+# re-exec afterwards is `refresh`, which does orchestration, not downloads. So
+# the fetch that the new CLI knows how to do never runs on the update that
+# delivers it. Re-running `update` does not help either: CURRENT now equals
+# LATEST, so it returns at "Already up to date" before reaching this.
+#
+# That left every upgraded node without the offline map builder, with no way
+# to get it short of the next release. Calling this from the up-to-date path
+# too means `sudo droneaware update` always repairs a missing asset.
+# The Web UI runs as the unprivileged `droneaware` user, but everything it
+# needs lives in a root-owned install directory. Without this it cannot read
+# config.env (the Node settings tab shows "Cannot read config.env"), cannot
+# write it back when settings are saved, and cannot write the downloaded map
+# pack — os.replace needs write permission on the DIRECTORY, not just the file.
+#
+# Group access rather than handing the directory over: root still owns
+# everything, the Web UI's group gets read/write on the two things it must
+# touch. setgid on the directory so files created later inherit the group.
+#
+# Only applied when the Web UI is actually installed — a node without it keeps
+# the tighter permissions. Note this does put config.env, which holds the node
+# token, within reach of the droneaware user; that is inherent to the Web UI
+# being able to edit settings at all.
+_grant_webui_access() {
+    getent group droneaware >/dev/null 2>&1 || return 0
+    chgrp droneaware "${INSTALL_DIR}" 2>/dev/null || true
+    chmod 2775 "${INSTALL_DIR}" 2>/dev/null || true
+    if [[ -f "${INSTALL_DIR}/config.env" ]]; then
+        chgrp droneaware "${INSTALL_DIR}/config.env" 2>/dev/null || true
+        chmod 660 "${INSTALL_DIR}/config.env" 2>/dev/null || true
+    fi
+}
+
+# Ensure the Web UI has everything the INSTALLED version ships with.
+#
+# 🚨 This is what makes a CLI change take effect on the update that delivers
+# it, rather than the one after. cmd_update runs the OLD CLI start to finish —
+# the new CLI only lands at the end — so anything the new CLI knows how to
+# fetch would otherwise wait for the next release. The re-exec of `refresh`
+# already exists to close that gap for config migration and service topology
+# (v1.5.0.2); assets were simply never wired into it.
+#
+# Keyed on the installed version, not "latest": the assets a node needs are
+# the ones belonging to the release it is running.
+_ensure_webui_current() {
+    [[ -f /etc/systemd/system/droneaware-web.service ]] || return 0
+    local ver
+    ver=$(cat "$VERSION_FILE" 2>/dev/null | tr -d '[:space:]')
+    [[ -n "$ver" ]] || return 0
+    [[ "$ver" =~ ^v ]] || ver="v${ver}"
+    _grant_webui_access
+    _ensure_webui_assets "https://github.com/${GITHUB_REPO}/releases/download/${ver}"
+}
+
+
+_ensure_webui_assets() {
+    local base="$1"
+    if [[ ! -x "${INSTALL_DIR}/pmtiles" ]]; then
+        echo "  Downloading pmtiles (offline map builder)..."
+        if curl -fsSL --retry 3 --max-time 180 "${base}/pmtiles" -o "${INSTALL_DIR}/pmtiles.part" \
+           && [[ -s "${INSTALL_DIR}/pmtiles.part" ]]; then
+            mv "${INSTALL_DIR}/pmtiles.part" "${INSTALL_DIR}/pmtiles"
+            chmod +x "${INSTALL_DIR}/pmtiles"
+            curl -fsSL --retry 2 --max-time 60 "${base}/pmtiles.LICENSE" \
+                 -o "${INSTALL_DIR}/pmtiles.LICENSE" 2>/dev/null || true
+            chown droneaware:droneaware "${INSTALL_DIR}/pmtiles" 2>/dev/null || true
+            info "pmtiles installed."
+        else
+            rm -f "${INSTALL_DIR}/pmtiles.part"
+            warn "pmtiles download failed — offline map downloads unavailable."
+            warn "  Retry later with: sudo droneaware update"
+        fi
+    fi
+
+    # Static 15 MB artifact — fetched once, never re-pulled.
+    if [[ ! -f "${INSTALL_DIR}/world.pmtiles" ]]; then
+        echo "  Downloading offline basemap (15 MB)..."
+        if curl -fsSL --retry 3 --max-time 300 \
+                "https://tiles.droneaware.io/world.pmtiles" \
+                -o "${INSTALL_DIR}/world.pmtiles.part" \
+           && [[ "$(head -c 7 "${INSTALL_DIR}/world.pmtiles.part")" == "PMTiles" ]]; then
+            mv "${INSTALL_DIR}/world.pmtiles.part" "${INSTALL_DIR}/world.pmtiles"
+            chown droneaware:droneaware "${INSTALL_DIR}/world.pmtiles" 2>/dev/null || true
+            info "Offline basemap installed."
+        else
+            rm -f "${INSTALL_DIR}/world.pmtiles.part"
+            warn "Offline basemap download failed — the map will need internet."
+        fi
+    fi
+}
+
 
 cmd_update() {
     require_root "update"
@@ -1441,13 +1540,21 @@ if candidates:
     echo "  Latest    : ${LATEST}"
     echo ""
 
+    BASE="https://github.com/${GITHUB_REPO}/releases/download/${LATEST}"
+
     if [[ "$CURRENT" == "$LATEST" ]]; then
         info "Already up to date."
+        # Nothing to install, but still repair anything missing. The
+        # re-exec of `refresh` that normally does this is skipped on the
+        # up-to-date path, because we return before reaching it.
+        if [[ -f /etc/systemd/system/droneaware-web.service ]]; then
+            _grant_webui_access
+            _ensure_webui_assets "$BASE"
+        fi
         echo ""
         return
     fi
 
-    BASE="https://github.com/${GITHUB_REPO}/releases/download/${LATEST}"
     echo "  Downloading binaries..."
     curl -fsSL --retry 3 "${BASE}/ble_feeder"  -o /tmp/da_ble_feeder  || fatal "Failed to download ble_feeder"
     curl -fsSL --retry 3 "${BASE}/wifi_feeder" -o /tmp/da_wifi_feeder || fatal "Failed to download wifi_feeder"
@@ -1528,39 +1635,8 @@ SUDOERS
             rm -f "$_sd"
         fi
 
-        # pmtiles is newer than most installs — fetch it when absent so the
-        # offline map builder appears on update, not only on fresh installs.
-        if [[ ! -x "${INSTALL_DIR}/pmtiles" ]]; then
-            echo "  Downloading pmtiles (offline map builder)..."
-            if curl -fsSL --retry 3 "${BASE}/pmtiles" -o "${INSTALL_DIR}/pmtiles"; then
-                chmod +x "${INSTALL_DIR}/pmtiles"
-                curl -fsSL --retry 2 "${BASE}/pmtiles.LICENSE" \
-                     -o "${INSTALL_DIR}/pmtiles.LICENSE" 2>/dev/null || true
-                chown droneaware:droneaware "${INSTALL_DIR}/pmtiles" 2>/dev/null || true
-                info "pmtiles installed."
-            else
-                rm -f "${INSTALL_DIR}/pmtiles"
-                warn "pmtiles download failed — offline map downloads unavailable."
-            fi
-        fi
-
-        # Existing nodes predate the offline basemap, so fetch it once if it
-        # is absent. Skipped when already present — this is a static 15 MB
-        # artifact, not something to re-pull on every update.
-        if [[ ! -f "${INSTALL_DIR}/world.pmtiles" ]]; then
-            echo "  Downloading offline basemap (15 MB)..."
-            if curl -fsSL --retry 3 --max-time 300 \
-                    "https://tiles.droneaware.io/world.pmtiles" \
-                    -o "${INSTALL_DIR}/world.pmtiles.part" \
-               && [[ "$(head -c 7 "${INSTALL_DIR}/world.pmtiles.part")" == "PMTiles" ]]; then
-                mv "${INSTALL_DIR}/world.pmtiles.part" "${INSTALL_DIR}/world.pmtiles"
-                chown droneaware:droneaware "${INSTALL_DIR}/world.pmtiles" 2>/dev/null || true
-                info "Offline basemap installed."
-            else
-                rm -f "${INSTALL_DIR}/world.pmtiles.part"
-                warn "Offline basemap download failed — the map will need internet."
-            fi
-        fi
+        _grant_webui_access
+        _ensure_webui_assets "$BASE"
     fi
 
     echo "  Stopping services..."
@@ -2584,6 +2660,7 @@ cmd_install_webui() {
         info "Created droneaware system user for Web UI."
     fi
     chown droneaware:droneaware "${INSTALL_DIR}/web_ui" 2>/dev/null || true
+    _grant_webui_access
 
     # Bump LocalPublisher buffer + add port (idempotent additions).
     if grep -q '^DRONEAWARE_LOCAL_BUFFER_MAX_BYTES=' "${INSTALL_DIR}/config.env"; then
