@@ -236,9 +236,11 @@ WIFI_DWELL_EXPLORE_SEC=1.0
 
 # Camping: hold the channel once a drone is heard on it, instead of
 # carrying on sweeping past it.
-#   TRIGGER_FRAMES / TRIGGER_WINDOW_SEC  frames needed to engage. Two
-#       within two seconds — one stray decode must not be able to pin the
-#       radio to an empty channel.
+#   TRIGGER_FRAMES / TRIGGER_WINDOW_SEC  frames needed to engage. One,
+#       because only an aircraft transmits the Remote ID identifier — a
+#       single frame already proves something is flying, and waiting for a
+#       second one mostly loses the distant aircraft heard intermittently.
+#       WINDOW_SEC has no effect at one frame; it governs a raised count.
 #   SILENCE_SEC   let go after this long with nothing heard on a SOCIAL
 #       channel. The timer is per-channel and any frame resets it, so a
 #       second aircraft arriving keeps the node camped after the first one
@@ -255,7 +257,15 @@ WIFI_DWELL_EXPLORE_SEC=1.0
 #       hiding every other drone. Ignored with two adapters, where the
 #       sweeping adapter camps indefinitely because its partner never
 #       leaves ch6.
-WIFI_CAMP_TRIGGER_FRAMES=2
+# Antenna height above ground. Used for detection-range calibration and shown
+# on the local map; blank is fine if it is unknown.
+NODE_ELEVATION_AGL_M=
+
+# Total size of each feeder's rotated logs. Roughly six months of history at
+# the default; the cap exists to stop a fault loop filling the card.
+DRONEAWARE_LOG_MAX_BYTES=40000000
+
+WIFI_CAMP_TRIGGER_FRAMES=1
 WIFI_CAMP_TRIGGER_WINDOW_SEC=2.0
 WIFI_CAMP_SILENCE_SEC=6.0
 WIFI_CAMP_SILENCE_OFFSOCIAL_SEC=3.0
@@ -417,6 +427,50 @@ EOF
     # EOF
     #       info "Added vX.Y.Z options to config.env"
     #   fi
+
+    # v1.6.0 — the flight history. Undelivered detections used to live only
+    # in RAM, so a power cut, a reboot or a clean stop threw them away. They
+    # now go to disk first, and a successful upload no longer deletes them.
+    if ! grep -q '^DRONEAWARE_SPOOL_DIR=' "$cfg"; then
+        [[ "$backed_up" == "0" ]] && cp "$cfg" "${cfg}.bak.$(date +%s)" && backed_up=1
+        cat >> "$cfg" <<'EOF'
+# ─── Local Detection Database (this node's own flight history) ───
+# Detections are written to disk before they are uploaded, so nothing is lost
+# to a power cut, a reboot, an update, or carrying the node home in a vehicle.
+# The spool is also the node's own record: uploading a detection does NOT
+# delete it.
+#
+# RETENTION_DAYS   how long to keep detections locally after they have been
+#                  uploaded. Set to "never" to keep them indefinitely. A
+#                  detection that has NOT been uploaded is kept regardless of
+#                  this setting.
+# MAX_GB           hard ceiling on the history, whatever RETENTION_DAYS says.
+#                  This is the backstop for a spoof flood, where a node can be
+#                  fed detections far faster than it will ever see legitimately
+#                  and would otherwise fill the card in the name of retention.
+#                  Uploaded history is discarded first; the node never stops
+#                  recording to stay under it.
+# WRITE_INTERVAL   how often staged detections are written to disk. This is the
+#                  worst-case loss window on a power cut, and nothing else —
+#                  the same number of bytes reaches the card at any interval,
+#                  because each detection is written exactly once.
+DRONEAWARE_SPOOL_DIR=/var/lib/droneaware/spool
+DRONEAWARE_SPOOL_RETENTION_DAYS=90
+DRONEAWARE_SPOOL_MAX_GB=4
+DRONEAWARE_SPOOL_WRITE_INTERVAL_SEC=15.0
+EOF
+        info "Detections are now kept on disk for 90 days. Set DRONEAWARE_SPOOL_RETENTION_DAYS=never to keep them indefinitely."
+    fi
+
+    # v1.6.0 — the camp trigger dropped from two frames to one. Existing
+    # nodes have 2 written into config.env, and a migrate block that only
+    # adds missing keys would leave every one of them on the old rule
+    # forever. Rewrite it, but only where it still holds the old default —
+    # an operator who deliberately raised it keeps their value.
+    if grep -q '^WIFI_CAMP_TRIGGER_FRAMES=2$' "$cfg" 2>/dev/null; then
+        sed -i 's/^WIFI_CAMP_TRIGGER_FRAMES=2$/WIFI_CAMP_TRIGGER_FRAMES=1/' "$cfg"
+        info "Camp trigger updated to one frame."
+    fi
 
     # v1.5.0+ — detect present monitor-capable USB adapters and set the
     # right adapter mode (single vs dual). Populates the appropriate
@@ -1411,8 +1465,25 @@ if candidates:
     # these files, and the refresh path (_ensure_dual_adapter_unit_files_
     # installed) can recover later. Log a warning so we notice release-
     # asset gaps but don't block the update.
+    # v1.6.0: the single-adapter and BLE units are re-downloaded too. They
+    # existed on every node from install, so they were never re-fetched — but
+    # their CONTENTS now change between releases (TimeoutStopSec, so a stop
+    # cannot cut short the flush that writes detections to disk, and
+    # StateDirectory for that directory). Without this, a dual-adapter node
+    # would pick the change up on the 2g/5g units while the same node's BLE
+    # unit silently kept the old file.
+    wifi_svc_ok=1
+    ble_svc_ok=1
     wifi_2g_svc_ok=1
     wifi_5g_svc_ok=1
+    if ! curl -fsSL --retry 3 "${BASE}/droneaware-wifi.service" -o /tmp/da_wifi_svc; then
+        warn "droneaware-wifi.service download failed — keeping the installed unit."
+        wifi_svc_ok=0
+    fi
+    if ! curl -fsSL --retry 3 "${BASE}/droneaware-ble.service" -o /tmp/da_ble_svc; then
+        warn "droneaware-ble.service download failed — keeping the installed unit."
+        ble_svc_ok=0
+    fi
     if ! curl -fsSL --retry 3 "${BASE}/droneaware-wifi-2g.service" -o /tmp/da_wifi_2g_svc; then
         warn "droneaware-wifi-2g.service download failed — dual-adapter mode will need 'sudo droneaware refresh' after update."
         wifi_2g_svc_ok=0
@@ -1436,6 +1507,59 @@ if candidates:
         else
             warn "web_ui download failed — feeder update will continue."
             warn "Web UI binary will remain at the previously installed version."
+        fi
+
+        # Nodes installed before the settings panel have no sudoers rule, so
+        # its Refresh / Swap / Install buttons would fail. Validated before
+        # installing — a malformed file in /etc/sudoers.d locks sudo out.
+        if [[ ! -f /etc/sudoers.d/droneaware-webui ]]; then
+            _sd="$(mktemp)"
+            cat > "$_sd" <<'SUDOERS'
+droneaware ALL=(root) NOPASSWD: /usr/local/bin/droneaware refresh
+droneaware ALL=(root) NOPASSWD: /usr/local/bin/droneaware swap
+droneaware ALL=(root) NOPASSWD: /usr/local/bin/droneaware update
+SUDOERS
+            if visudo -c -f "$_sd" >/dev/null 2>&1; then
+                install -m 0440 -o root -g root "$_sd" /etc/sudoers.d/droneaware-webui
+                info "Web UI may run refresh / swap / update."
+            else
+                warn "sudoers rule failed validation — Web UI buttons unavailable."
+            fi
+            rm -f "$_sd"
+        fi
+
+        # pmtiles is newer than most installs — fetch it when absent so the
+        # offline map builder appears on update, not only on fresh installs.
+        if [[ ! -x "${INSTALL_DIR}/pmtiles" ]]; then
+            echo "  Downloading pmtiles (offline map builder)..."
+            if curl -fsSL --retry 3 "${BASE}/pmtiles" -o "${INSTALL_DIR}/pmtiles"; then
+                chmod +x "${INSTALL_DIR}/pmtiles"
+                curl -fsSL --retry 2 "${BASE}/pmtiles.LICENSE" \
+                     -o "${INSTALL_DIR}/pmtiles.LICENSE" 2>/dev/null || true
+                chown droneaware:droneaware "${INSTALL_DIR}/pmtiles" 2>/dev/null || true
+                info "pmtiles installed."
+            else
+                rm -f "${INSTALL_DIR}/pmtiles"
+                warn "pmtiles download failed — offline map downloads unavailable."
+            fi
+        fi
+
+        # Existing nodes predate the offline basemap, so fetch it once if it
+        # is absent. Skipped when already present — this is a static 15 MB
+        # artifact, not something to re-pull on every update.
+        if [[ ! -f "${INSTALL_DIR}/world.pmtiles" ]]; then
+            echo "  Downloading offline basemap (15 MB)..."
+            if curl -fsSL --retry 3 --max-time 300 \
+                    "https://tiles.droneaware.io/world.pmtiles" \
+                    -o "${INSTALL_DIR}/world.pmtiles.part" \
+               && [[ "$(head -c 7 "${INSTALL_DIR}/world.pmtiles.part")" == "PMTiles" ]]; then
+                mv "${INSTALL_DIR}/world.pmtiles.part" "${INSTALL_DIR}/world.pmtiles"
+                chown droneaware:droneaware "${INSTALL_DIR}/world.pmtiles" 2>/dev/null || true
+                info "Offline basemap installed."
+            else
+                rm -f "${INSTALL_DIR}/world.pmtiles.part"
+                warn "Offline basemap download failed — the map will need internet."
+            fi
         fi
     fi
 
@@ -1485,6 +1609,8 @@ if candidates:
     # sees the new units before _start_wifi_services_for_current_mode runs.
     # Skip cleanly if the download failed — refresh's self-heal will retry
     # later, and single-adapter operators don't need these files.
+    [[ "$wifi_svc_ok"    == "1" ]] && install -m 644 /tmp/da_wifi_svc /etc/systemd/system/droneaware-wifi.service
+    [[ "$ble_svc_ok"     == "1" ]] && install -m 644 /tmp/da_ble_svc  /etc/systemd/system/droneaware-ble.service
     [[ "$wifi_2g_svc_ok" == "1" ]] && install -m 644 /tmp/da_wifi_2g_svc /etc/systemd/system/droneaware-wifi-2g.service
     [[ "$wifi_5g_svc_ok" == "1" ]] && install -m 644 /tmp/da_wifi_5g_svc /etc/systemd/system/droneaware-wifi-5g.service
     if [[ "$update_webui" == "1" ]]; then
@@ -1513,7 +1639,8 @@ if candidates:
             rm -f /usr/local/bin/droneaware.new 2>/dev/null || true
         fi
     fi
-    rm -f /tmp/da_ble_feeder /tmp/da_wifi_feeder /tmp/da_web_ui /tmp/da_cli /tmp/da_wifi_2g_svc /tmp/da_wifi_5g_svc
+    rm -f /tmp/da_ble_feeder /tmp/da_wifi_feeder /tmp/da_web_ui /tmp/da_cli \
+          /tmp/da_wifi_svc /tmp/da_ble_svc /tmp/da_wifi_2g_svc /tmp/da_wifi_5g_svc
     echo "$LATEST" > "$VERSION_FILE"
 
     # Nodes installed before v1.0.19 have service files pointing to /usr/local/bin/.
@@ -1756,12 +1883,117 @@ cmd_status() {
             elif [[ "$mode" == "monitor" ]];         then role="unused — run 'sudo droneaware refresh'"
             else                                          role="not used for detection"
             fi
-            printf "    %-7s %-13s %-8s %-7s %s\n" \
+            # Retune cost, measured by the feeder on this radio at startup.
+            # It spans 22-1007 ms across adapters we have tested and the
+            # radio is deaf for all of it, so it is the number that decides
+            # which of two adapters should be the one sweeping 5 GHz.
+            local rt sf
+            rt=""
+            for sf in /run/droneaware/wifi_state_2g.json \
+                      /run/droneaware/wifi_state_5g.json \
+                      /run/droneaware/wifi_state.json; do
+                [[ -f "$sf" ]] || continue
+                rt=$(python3 -c 'import json,sys
+try: s=json.load(open(sys.argv[1]))
+except Exception: sys.exit()
+if (s.get("adapter_mac") or "").lower()==(sys.argv[2] or "").lower():
+    ms=s.get("retune_ms")
+    if ms: print("%dms retune" % ms)' "$sf" "$mac" 2>/dev/null)
+                [[ -n "$rt" ]] && break
+            done
+            printf "    %-7s %-13s %-8s %-7s %s%s\n" \
                 "$ifn" "${drv:-?}" "${mode:-?}" \
-                "$( [[ -n "$chan" ]] && echo "ch${chan}" || echo "—" )" "$role"
+                "$( [[ -n "$chan" ]] && echo "ch${chan}" || echo "—" )" "$role" \
+                "$( [[ -n "$rt" ]] && echo "  ·  $rt" )"
         done
         echo ""
     fi
+
+    # Local detection database. Deliberately NOT called "the spool" here:
+    # that is the name of the mechanism, and the operator cares about the
+    # thing — how much of their own history the node is holding, and what
+    # will eventually remove it.
+    local _spool_dir
+    _spool_dir=$(_cfg_get "$cfg" DRONEAWARE_SPOOL_DIR)
+    [[ -z "$_spool_dir" ]] && _spool_dir="/var/lib/droneaware/spool"
+    python3 - "$_spool_dir" "$(_cfg_get "$cfg" DRONEAWARE_SPOOL_RETENTION_DAYS)" \
+                            "$(_cfg_get "$cfg" DRONEAWARE_SPOOL_MAX_GB)" <<'PYEOF'
+import json, os, sys, time
+
+root, days_raw, gb_raw = sys.argv[1], sys.argv[2].strip(), sys.argv[3].strip()
+days = days_raw or "90"
+gb = gb_raw or "4"
+never = days.lower() in ("never", "none", "0", "-1", "forever")
+
+
+def human(n):
+    if n < 1024:
+        return "%d B" % n
+    for unit in ("KB", "MB", "GB"):
+        n /= 1024.0
+        if n < 1024 or unit == "GB":
+            return "%.1f %s" % (n, unit)
+
+
+def ago(sec):
+    sec = int(max(0, sec))
+    if sec < 90:
+        return "%ds ago" % sec
+    if sec < 5400:
+        return "%dm ago" % (sec // 60)
+    if sec < 172800:
+        return "%dh %dm ago" % (sec // 3600, (sec % 3600) // 60)
+    return "%dd ago" % (sec // 86400)
+
+
+total = files = pending = 0
+oldest = None
+feeders = sorted(os.listdir(root)) if os.path.isdir(root) else []
+for feeder in feeders:
+    d = os.path.join(root, feeder)
+    if feeder == "index" or not os.path.isdir(d):
+        continue
+    segs = sorted(n for n in os.listdir(d)
+                  if n.startswith("seg-") and n.endswith(".jsonl"))
+    # The cursor marks how far uploading has got; everything after it is
+    # still waiting to reach the server.
+    cur_seg, cur_off = "", 0
+    try:
+        c = json.load(open(os.path.join(d, "cursor")))
+        cur_seg, cur_off = str(c.get("segment") or ""), int(c.get("offset") or 0)
+    except Exception:
+        pass
+    past_cursor = cur_seg not in segs
+    for n in segs:
+        p = os.path.join(d, n)
+        try:
+            sz = os.path.getsize(p)
+            mt = os.path.getmtime(p)
+        except OSError:
+            continue
+        total += sz
+        files += 1
+        if oldest is None or mt < oldest:
+            oldest = mt
+        if past_cursor:
+            pending += sz
+        elif n == cur_seg:
+            past_cursor = True
+            pending += max(0, sz - cur_off)
+
+limit = "never deleted" if never else ("%s days" % days)
+if not files:
+    print("  Local Detection Database: empty - nothing recorded yet"
+          "  (max: %s, %s GB)" % (limit, gb))
+else:
+    print("  Local Detection Database: %s in %d file%s  (max: %s, %s GB)"
+          % (human(total), files, "" if files == 1 else "s", limit, gb))
+    if oldest:
+        print("    Oldest record    %s" % ago(time.time() - oldest))
+    if pending:
+        print("    Not yet uploaded %s - kept until it is" % human(pending))
+PYEOF
+    echo ""
 
     # Web UI URL — shown when service is active and bound, so operators
     # know how to reach it from another device on the LAN.

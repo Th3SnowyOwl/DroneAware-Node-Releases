@@ -65,6 +65,8 @@ echo "      Building ble_feeder..."
     --workpath "$SCRIPT_DIR/.build_work/ble" \
     --specpath "$SCRIPT_DIR/.build_specs" \
     --name ble_feeder \
+    --paths "$SCRIPT_DIR" \
+    --hidden-import spool \
     --collect-all bleak \
     --hidden-import bleak.backends.bluezdbus \
     --hidden-import bleak.backends.bluezdbus.scanner \
@@ -80,6 +82,8 @@ echo "      Building wifi_feeder..."
     --workpath "$SCRIPT_DIR/.build_work/wifi" \
     --specpath "$SCRIPT_DIR/.build_specs" \
     --name wifi_feeder \
+    --paths "$SCRIPT_DIR" \
+    --hidden-import spool \
     --hidden-import serial \
     "$SCRIPT_DIR/wifi_feeder.py" \
     > /dev/null 2>&1
@@ -107,19 +111,55 @@ echo "      Building web_ui..."
     --workpath "$SCRIPT_DIR/.build_work/web" \
     --specpath "$SCRIPT_DIR/.build_specs" \
     --name web_ui \
+    --paths "$SCRIPT_DIR" \
+    --hidden-import spool \
     --add-data "$SCRIPT_DIR/web_static:web_static" \
     --hidden-import flask \
+    --hidden-import requests \
     "$SCRIPT_DIR/web_ui.py" \
     > /dev/null 2>&1
 
 echo "      Done."
 
 # ---------------------------------------------------------------------------
+# 2b. pmtiles — third-party, not built here
+#
+# web_ui shells out to this to extract a region pack from the planet archive.
+# It reads by HTTP range and never mirrors the source, so the node needs the
+# binary but not the data.
+#
+# Pinned, and republished as OUR release asset rather than fetched from
+# protomaps at install time: nodes then depend on one host, and a release is
+# reproducible from its own assets.
+# ---------------------------------------------------------------------------
+PMTILES_VERSION="1.31.2"
+echo "[2b/3] Fetching pmtiles ${PMTILES_VERSION} (arm64)..."
+if ! command -v curl >/dev/null 2>&1; then
+    echo "      ERROR: curl is not installed, so pmtiles cannot be fetched."
+    echo "             apt-get install -y curl ca-certificates"
+    exit 1
+fi
+_pm_url="https://github.com/protomaps/go-pmtiles/releases/download/v${PMTILES_VERSION}/go-pmtiles_${PMTILES_VERSION}_Linux_arm64.tar.gz"
+if curl -fsSL --retry 3 "$_pm_url" -o "$SCRIPT_DIR/.build_work/pmtiles.tgz"; then
+    # BSD-3-Clause clause 2 requires the copyright notice and license text to
+    # accompany a binary redistribution, so the LICENSE ships with it as a
+    # release asset and is installed next to the binary on every node.
+    tar xzf "$SCRIPT_DIR/.build_work/pmtiles.tgz" -C "$DIST_DIR" pmtiles LICENSE
+    mv "$DIST_DIR/LICENSE" "$DIST_DIR/pmtiles.LICENSE"
+    chmod +x "$DIST_DIR/pmtiles"
+    rm -f "$SCRIPT_DIR/.build_work/pmtiles.tgz"
+    echo "      Done."
+else
+    echo "      ERROR: could not download pmtiles ${PMTILES_VERSION}"
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Verify and report
 # ---------------------------------------------------------------------------
 echo "[3/3] Verifying output..."
 
-for binary in ble_feeder wifi_feeder web_ui; do
+for binary in ble_feeder wifi_feeder web_ui pmtiles; do
     path="$DIST_DIR/$binary"
     if [[ -f "$path" ]]; then
         size=$(du -sh "$path" | cut -f1)

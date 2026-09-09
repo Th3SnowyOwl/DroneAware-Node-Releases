@@ -11,7 +11,7 @@
 
   <!-- Brand mark favicon (paper airplane, green #10b981) — inlined as data URI
        so the browser tab icon works without an additional asset request. -->
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' fill='transparent'/%3E%3Cpath d='M22 2L11 13' stroke='%2310b981' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M22 2L15 22L11 13L2 9L22 2Z' stroke='%2310b981' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='65 200 250 245'><g fill='none' stroke='%2310b981' stroke-width='15' stroke-linecap='round' stroke-linejoin='round' transform='translate%28-35 2.5%29'><path d='M283.2 351.8 L250 420 L216 330 L120 300 L192.8 266.6 L247.4 241.6 L302 216.5 L268 274 L333 249.5 L308.1 300.7 Z'/><path d='M216 330 L268 274'/></g></svg>">
 
   <style>
     /* =========================================================================
@@ -20,6 +20,10 @@
        (#00E5FF) is the accent for links / focus / selected state / .io.
        ========================================================================= */
     :root {
+      /* Sized so a full 44px touch target fits with breathing room.
+         Operators have built mobile touchscreen node displays; 44px is
+         the minimum comfortable tap target. */
+      --header-h: 60px;
       --bg-primary:    #0A1228;
       --bg-surface:    #0F1B3A;
       --bg-elevated:   #142450;
@@ -80,9 +84,9 @@
                    Consolas, "Courier New", monospace;
     }
 
-    /* ========== Header (44px fixed top) ========== */
+    /* ========== Header (fixed top, --header-h) ========== */
     .header {
-      height: 44px;
+      height: var(--header-h);
       background: var(--bg-surface);
       border-bottom: 1px solid var(--border);
       display: flex;
@@ -104,7 +108,7 @@
       flex-shrink: 0;
     }
     .brand-wordmark .brand-tld { color: var(--brand); }  /* green — matches the paper-airplane brand mark */
-    .brand-wordmark svg { width: 22px; height: 22px; flex-shrink: 0; }
+    .brand-wordmark svg { width: 24px; height: 24px; flex-shrink: 0; color: var(--brand); }
 
     .header-center {
       flex: 1;
@@ -140,14 +144,333 @@
       box-shadow: 0 0 6px var(--status-ok);
     }
     .status-pill.offline .dot { background: var(--status-idle); box-shadow: none; }
+    /* Offline but working: amber, not red. The node is doing its job. */
+    .status-pill.scanning { color: var(--fresh-recent); border-color: var(--fresh-recent); }
+    .status-pill.scanning .dot {
+      background: var(--fresh-recent); box-shadow: 0 0 6px var(--fresh-recent);
+    }
 
     .header-right {
       display: flex;
       align-items: center;
       gap: 8px;
     }
+
+    /* ── Settings panel (v1.6.0) ─────────────────────────────────────────
+       Values taken from the share modal on droneaware.io/live.html so the
+       node UI and the public site feel like one product: 14px radius, 28px
+       padding, blurred backdrop, absolute top-right close, accent callout at
+       6%/20%. Expressed as classes rather than the inline styles the public
+       page uses, matching this file's convention.
+
+       Deliberate divergence: no Font Awesome. The public site pulls it from a
+       CDN; a node showing this UI may have no internet at all, which is the
+       entire reason the offline map exists. Text glyphs instead. */
+    .settings-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 99998;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+      align-items: center; justify-content: center; padding: 20px;
+    }
+    .settings-backdrop.open { display: flex; }
+    .settings-panel {
+      background: var(--bg-surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px 28px 24px;
+      max-width: 520px; width: 100%; max-height: 88vh; overflow-y: auto;
+      box-shadow: 0 12px 50px rgba(0,0,0,0.6);
+      color: var(--text-primary); position: relative;
+    }
+    .settings-close {
+      position: absolute; top: 12px; right: 12px;
+      background: none; border: none; color: var(--text-dim);
+      font-size: 24px; cursor: pointer; width: 32px; height: 32px;
+      border-radius: 6px; line-height: 1;
+    }
+    .settings-panel h2 {
+      margin: 0 0 14px; font-size: 18px; font-weight: 700;
+      color: var(--text-primary);
+    }
+    .settings-panel .lede {
+      font-size: 13px; color: var(--text-dim); line-height: 1.4; margin: 0 0 18px;
+    }
+    /* Paginated settings. Map is the first page; Node follows. Underline
+       rides on the container's own border, hence the -1px pull. */
+    .settings-tabs {
+      display: flex; gap: 2px; margin: 0 0 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    .settings-tab {
+      appearance: none; background: transparent; border: 0;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+      font: inherit; font-size: 13px; font-weight: 600;
+      color: var(--text-dim); padding: 8px 14px; cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .settings-tab:hover { color: var(--text-primary); }
+    .settings-tab.is-active {
+      color: var(--accent); border-bottom-color: var(--accent);
+    }
+    /* .settings-page has no display rule of its own, but be explicit —
+       a later display: block would otherwise defeat the hidden attribute. */
+    .settings-page[hidden] { display: none; }
+    .cfg-group {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--text-dim);
+      margin: 22px 0 10px; padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .cfg-group:first-child { margin-top: 0; }
+    .cfg-input {
+      width: 100%; box-sizing: border-box; background: var(--bg-primary);
+      color: var(--text-primary); border: 1px solid var(--border);
+      border-radius: 8px; padding: 0 11px; min-height: 44px;
+      font-size: 13px; font-family: inherit; outline: none;
+    }
+    .cfg-input:focus { border-color: var(--accent); }
+    .cfg-help {
+      font-size: 11px; color: var(--text-muted); line-height: 1.4;
+      margin: 6px 0 0;
+    }
+    .cfg-info-btn {
+      appearance: none; margin-left: 7px; width: 16px; height: 16px;
+      border-radius: 50%; border: 1px solid var(--border);
+      background: transparent; color: var(--text-dim);
+      font: 700 10px/1 inherit; cursor: pointer; vertical-align: middle;
+      padding: 0;
+    }
+    .cfg-info-btn:hover, .cfg-info-btn.is-open {
+      color: var(--accent); border-color: var(--accent);
+    }
+    .cfg-info {
+      font-size: 12px; line-height: 1.5; color: var(--text-dim);
+      margin: 0 0 8px; padding: 9px 11px;
+      background: rgba(0,229,255,0.06);
+      border-left: 2px solid rgba(0,229,255,0.4); border-radius: 0 6px 6px 0;
+    }
+    .adapter-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .adapter-row:last-child { border-bottom: 0; }
+    .adapter-name { font-size: 13px; color: var(--text-primary); font-weight: 600; }
+    .adapter-meta { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+    .adapter-role {
+      font-size: 11px; font-weight: 700; white-space: nowrap;
+      color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .adapter-role.is-onboard { color: var(--text-muted); }
+    .action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+    .density-table {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+      margin-bottom: 12px; padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .density-col { text-align: center; }
+    .density-head {
+      display: block; font-size: 10px; font-weight: 700;
+      letter-spacing: 0.07em; text-transform: uppercase;
+      color: var(--text-dim); margin-bottom: 5px;
+    }
+    .density-col b { font-size: 16px; color: var(--text-primary); }
+    .node-ident {
+      display: flex; align-items: baseline; gap: 10px;
+      margin: 0 0 20px; padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .node-ident-label {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--text-dim);
+    }
+    .node-ident-id { font-size: 17px; font-weight: 700; color: var(--text-primary); }
+    /* Errors get their own color. Accent cyan reads as "information" next to
+       every other box in this panel, so a failure in it goes unnoticed. */
+    .estimate-box.is-error {
+      background: rgba(245,158,11,0.10);
+      border-color: rgba(245,158,11,0.45);
+    }
+    .estimate-box.is-error .verdict,
+    .estimate-box.is-error .mark { color: #F59E0B; }
+    .estimate-box.is-error .mark {
+      font-weight: 800; display: inline-flex; align-items: center;
+      justify-content: center; width: 16px; height: 16px; flex: 0 0 16px;
+      border: 1.5px solid #F59E0B; border-radius: 50%; font-size: 11px;
+    }
+    /* CLI output is preformatted and can run long — wrap rather than
+       overflow the panel. */
+    /* Channel picker. Presets read as prose, the grid as hardware — the
+       default answer is "scan everything", so the grid is deliberately the
+       second thing you reach, not the first. */
+    .chan-preset {
+      display: flex; gap: 10px; align-items: flex-start;
+      padding: 8px 0; cursor: pointer; font-size: 13px;
+      min-height: 44px;                      /* touchscreen builds */
+    }
+    .chan-preset input { margin-top: 3px; accent-color: var(--accent); flex: none; }
+    .chan-preset strong { display: block; color: var(--text-primary); font-weight: 600; }
+    .chan-note {
+      display: block; color: var(--text-dim); font-size: 12px;
+      line-height: 1.45; margin-top: 2px;
+    }
+    .chan-advanced { margin-top: 10px; border-top: 1px solid rgba(0,229,255,0.15); }
+    .chan-advanced > summary {
+      cursor: pointer; padding: 11px 0; font-size: 13px; color: var(--accent);
+      min-height: 44px; display: flex; align-items: center;
+    }
+    .chan-warning {
+      background: rgba(245,158,11,0.10); border: 1px solid rgba(245,158,11,0.45);
+      border-radius: 6px; padding: 10px 12px; margin: 0 0 12px;
+      font-size: 12px; line-height: 1.5; color: #F59E0B;
+    }
+    .chan-band { margin-bottom: 12px; }
+    .chan-band-name {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+      color: var(--text-dim); margin-bottom: 5px;
+    }
+    .chan-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chan-cell {
+      display: flex; align-items: center; gap: 5px;
+      min-width: 44px; min-height: 44px; padding: 0 9px;
+      border: 1px solid var(--border); border-radius: 6px;
+      font-size: 13px; cursor: pointer; user-select: none;
+    }
+    .chan-cell:has(input:checked) {
+      border-color: var(--accent); background: rgba(0,229,255,0.08);
+    }
+    .chan-cell input { accent-color: var(--accent); }
+    .chan-unsupported { opacity: 0.35; cursor: not-allowed; }
+    .chan-held {
+      font-style: normal; font-size: 10px; text-transform: uppercase;
+      letter-spacing: 0.04em; color: var(--accent);
+    }
+    .chan-count { font-size: 12px; color: var(--text-dim); margin: 10px 0 0; }
+    .chan-count.chan-empty { color: #F59E0B; }
+    /* Destructive actions read as destructive. Amber rather than red: this
+       is disruptive, not dangerous — nothing is lost by shutting down. */
+    .danger-row {
+      display: flex; justify-content: center;
+      margin: 0 0 18px; padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .btn-danger {
+      min-height: 44px; padding: 0 18px; border-radius: 8px;
+      background: transparent; color: #F59E0B;
+      border: 1px solid rgba(245,158,11,0.55);
+      font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .btn-danger:hover { background: rgba(245,158,11,0.12); }
+    .confirm-backdrop {
+      /* Above the settings overlay (99998), which is the only place this can
+         be opened from. At a lower z-index the dialog still sets hidden=false
+         and still takes the click — it just renders BEHIND the panel, so a
+         test that asserts on .hidden passes while a human sees nothing. */
+      position: fixed; inset: 0; z-index: 99999;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(4,10,20,0.72); padding: 20px;
+    }
+    .confirm-backdrop[hidden] { display: none; }
+    .confirm-box {
+      background: var(--bg-elevated); border: 1px solid var(--border);
+      border-radius: 12px; padding: 22px; max-width: 380px; width: 100%;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.6);
+    }
+    .confirm-box h3 { margin: 0 0 10px; font-size: 16px; color: var(--text-primary); }
+    .confirm-box p {
+      margin: 0 0 18px; font-size: 13px; line-height: 1.5; color: var(--text-dim);
+    }
+    .confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
+    .confirm-actions button { min-height: 44px; }
+    .cfg-status-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+    /* Location picking. The backdrop stops intercepting clicks so the map
+       underneath stays usable, and the panel drops to a bar at the bottom. */
+    .pick-bar { display: none; }
+    .settings-backdrop.picking {
+      background: transparent; pointer-events: none; align-items: flex-end;
+    }
+    .settings-backdrop.picking .settings-panel {
+      pointer-events: auto; max-width: 560px; width: calc(100% - 32px);
+      margin-bottom: 20px; padding: 14px 16px; max-height: none;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+    }
+    .settings-backdrop.picking .settings-panel > h2,
+    .settings-backdrop.picking .settings-tabs,
+    .settings-backdrop.picking .settings-page,
+    .settings-backdrop.picking .settings-close { display: none; }
+    .settings-backdrop.picking .pick-bar {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .pick-text { flex: 1; min-width: 0; }
+    .pick-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+    .pick-coords { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+    .btn-inline.btn-primary {
+      color: var(--bg-primary); background: var(--accent);
+      border-color: var(--accent);
+    }
+    .btn-inline.btn-primary:hover { filter: brightness(1.1); background: var(--accent); }
+    .btn-inline:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-inline.btn-primary:disabled { background: var(--accent); }
+    .field { margin-bottom: 16px; }
+    .field label {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 13px; color: var(--text-dim); margin-bottom: 7px;
+    }
+    .field label b { color: var(--text-primary); font-weight: 700; }
+    .field input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .coord-row { display: flex; gap: 8px; }
+    .coord-row input {
+      flex: 1; min-width: 0; background: var(--bg-primary);
+      color: var(--text-primary); border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 11px; font-size: 13px;
+      font-family: inherit; outline: none;
+    }
+    .coord-row input:focus { border-color: var(--accent); }
+    .coord-readout {
+      flex: 1; min-width: 0; background: var(--bg-primary);
+      color: var(--text-primary); border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 11px; font-size: 13px;
+      display: flex; align-items: center;
+    }
+    .btn-inline {
+      background: transparent; color: var(--accent);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 0 14px; min-height: 44px; font: inherit; font-size: 13px;
+      font-weight: 600; cursor: pointer; white-space: nowrap;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .btn-inline:hover { border-color: var(--accent); background: var(--bg-elevated); }
+    /* Accent callout — same treatment as the share modal's URL box. */
+    .estimate-box {
+      background: rgba(0,229,255,0.06); border: 1px solid rgba(0,229,255,0.2);
+      border-radius: 8px; padding: 12px 14px; margin-bottom: 18px;
+    }
+    .estimate-row {
+      display: flex; justify-content: space-between; gap: 12px;
+      font-size: 13px; color: var(--text-dim); padding: 3px 0;
+    }
+    .estimate-row b { color: var(--text-primary); font-weight: 700; }
+    .verdict {
+      display: flex; gap: 9px; align-items: flex-start;
+      margin-top: 11px; padding-top: 11px;
+      border-top: 1px solid rgba(0,229,255,0.15);
+      font-size: 12px; line-height: 1.45; color: var(--text-dim);
+    }
+    .verdict .mark { font-size: 15px; line-height: 1.3; flex: none; font-weight: 700; }
+    .verdict.ok  .mark { color: var(--status-ok); }
+    .verdict.bad .mark { color: var(--status-error); }
+    .btn-download {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; background: var(--accent); border: none; color: #070F1E;
+      padding: 11px 14px; border-radius: 8px; font-size: 14px; font-weight: 700;
+      cursor: pointer; font-family: inherit; transition: filter 0.15s;
+    }
+    .btn-download:disabled {
+      background: #0B1C3E; border: 1px solid var(--border);
+      color: var(--text-muted); cursor: not-allowed;
+    }
     .icon-btn {
-      width: 30px; height: 30px;
+      /* 44px is the touch-target minimum. Operators have built mobile
+         touchscreen builds of the local UI and have to be able to hit
+         these; --header-h is sized to fit them. */
+      width: 44px; height: 44px;
       border: 1px solid var(--border);
       background: transparent;
       color: var(--text-dim);
@@ -169,7 +492,7 @@
     /* ========== Main layout (sidebar + map) ========== */
     .main {
       display: flex;
-      height: calc(100% - 44px - 28px);  /* minus header, minus status bar */
+      height: calc(100% - var(--header-h) - 28px);  /* minus header, minus status bar */
     }
     .sidebar {
       width: 340px;
@@ -197,21 +520,29 @@
       gap: 4px;
       font-size: 12px;
     }
+    /* Matches nodes.html .health-row (156-162) so the offline panel and the
+       online node card are visually the same component. */
     .feeder-row {
-      display: grid;
-      grid-template-columns: 20px 60px 1fr;
-      gap: 8px;
-      align-items: center;
-      color: var(--text-dim);
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; padding: 7px 0;
+      border-bottom: 1px solid rgba(30,58,110,0.5);
     }
-    .feeder-icon { text-align: center; opacity: 0.7; }
-    .feeder-label { font-weight: 600; color: var(--text-primary); }
-    .feeder-status { font-family: var(--font-mono, monospace); font-size: 11px; }
-    .feeder-status.ok      { color: var(--fresh-live); }
-    .feeder-status.warn    { color: var(--fresh-recent); }
-    .feeder-status.fault   { color: var(--fresh-older); }
-    .feeder-status.absent  { color: var(--text-muted); font-style: italic; }
-    .feeder-status.stale   { color: var(--text-muted); }
+    .feeder-row:last-child { border-bottom: none; }
+    .feeder-icon, .health-icon {
+      width: 16px; height: 14px; flex: 0 0 16px;
+    }
+    .ic-ble  { color: #3b82f6; }
+    .ic-wifi { color: #6366f1; }
+    .ic-loc  { color: #64748b; }
+    .ic-gps  { color: #10b981; }
+    .feeder-label { width: 64px; flex: 0 0 64px; color: var(--text-dim); }
+    .feeder-status {
+      font-weight: 600; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .health-meta {
+      color: #64748b; font-size: 10px; font-family: monospace; font-weight: 400;
+    }
     .chip {
       display: inline-flex;
       align-items: center;
@@ -266,6 +597,10 @@
       gap: 12px;
       padding: 12px;
       border: 1px solid var(--border);
+      /* The accent bar down the left edge, as on droneaware.io/live.html:
+         it fills in when a card is selected, so the sidebar and the map agree
+         about which aircraft you are looking at. */
+      border-left: 2px solid rgba(0,229,255,0.2);
       border-radius: 6px;
       background: var(--bg-surface);
       margin-bottom: 6px;
@@ -275,8 +610,13 @@
     .card:hover {
       background: var(--bg-elevated);
       border-color: var(--border-hover);
+      border-left-color: rgba(0,229,255,0.45);
     }
-    .card.selected { border-color: var(--accent); }
+    .card.selected {
+      border-color: var(--border);
+      border-left-color: var(--accent);
+      background: rgba(0,229,255,0.08);
+    }
     .card-thumb {
       flex-shrink: 0;
       width: 36px; height: 36px;
@@ -380,15 +720,80 @@
       width: 96px;
       height: 96px;
       opacity: 0.7;
+      color: var(--brand);
     }
     .empty .title { font-size: 14px; font-weight: 700; color: var(--text-dim); }
     .empty .sub { font-size: 12px; }
 
     /* ========== Map ========== */
+    /* The map now lives inside a column so the replay bar can sit above it
+       and shrink it, rather than floating over the airspace it exists to
+       explain. */
+    .map-wrap { flex: 1; height: 100%; display: flex; flex-direction: column; min-width: 0; }
     .map {
       flex: 1;
-      height: 100%;
+      min-height: 0;
       background: var(--bg-primary);
+    }
+
+    /* ---- Replay ---- */
+    .replay-bar {
+      flex: none; padding: 10px 16px 12px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+    }
+    .replay-head {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+    }
+    .replay-title {
+      font-size: 11px; letter-spacing: 0.06em; color: var(--accent); font-weight: 700;
+    }
+    .replay-window {
+      font-size: 12px; color: var(--text-primary); flex: 1;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    /* The two inputs are transparent and stacked over a painted track: a
+       native range track cannot carry a per-pixel background, and two handles
+       need two inputs. */
+    .replay-slider { position: relative; height: 44px; }
+    .replay-track {
+      position: absolute; left: 0; right: 0; top: 13px; height: 18px;
+      border-radius: 4px; overflow: hidden;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+    }
+    .replay-slider input[type="range"] {
+      position: absolute; left: 0; width: 100%; margin: 0;
+      top: 0; height: 44px;                 /* 44px touch target */
+      -webkit-appearance: none; appearance: none;
+      background: none; pointer-events: none;
+    }
+    .replay-slider input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; pointer-events: auto; cursor: ew-resize;
+      width: 14px; height: 30px; border-radius: 3px;
+      background: var(--accent); border: 2px solid var(--bg-elevated);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+    .replay-slider input[type="range"]::-moz-range-thumb {
+      pointer-events: auto; cursor: ew-resize;
+      width: 14px; height: 30px; border-radius: 3px;
+      background: var(--accent); border: 2px solid var(--bg-elevated);
+    }
+    .replay-foot {
+      display: flex; align-items: center; gap: 10px; margin-top: 2px;
+      font-size: 11px; color: var(--text-dim);
+    }
+    .replay-foot #replay-right { margin-left: auto; }
+    .replay-key { display: flex; align-items: center; gap: 6px; font-size: 10px; }
+    .replay-key i {
+      display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+      margin-right: 2px; vertical-align: -1px;
+    }
+    .k-det  { background: var(--accent); }
+    .k-live { background: #3f6f8c; }
+    .k-gap  { background: transparent; border: 1px solid var(--border); }
+    .replay-note {
+      margin: 8px 0 0; font-size: 11px; line-height: 1.45; color: #F59E0B;
     }
     .leaflet-container {
       background: var(--bg-primary);
@@ -398,11 +803,35 @@
       transform-origin: center;
     }
     .drone-marker svg {
-      width: 24px; height: 24px;
+      /* 28px, up from 24. The mark's silhouette carries less ink than the
+         paper plane it replaced — its wings taper to points — so it needs a
+         little more room to read at the same map zoom. */
+      width: 28px; height: 28px;
       transition: color 0.2s;
+      /* 🚨 A dark casing on EVERY marker, not a coloured glow.
+         The basemap paints water #80deea in its light flavour, which is
+         within a few degrees of hue of the live cyan — a live drone over a
+         lake or a river was very nearly invisible. The previous rule made it
+         worse rather than better: it bloomed the marker's OWN colour outward,
+         so a cyan aircraft on cyan water smeared into it.
+         A dark casing is the cartographic answer — it separates the mark from
+         whatever is beneath it (water, parkland, roads) without spending any
+         of the palette, so live/recent/older keep their meaning. Tested
+         against all four basemap surfaces in both flavours. */
+      filter: drop-shadow(0 0 1.5px rgba(0,0,0,0.95))
+              drop-shadow(0 0 3px rgba(0,0,0,0.7));
     }
+    /* Live aircraft pulse instead of glowing. Motion reads at a glance and
+       costs no colour, so it cannot collide with anything the map paints. */
     .drone-marker.live svg {
-      filter: drop-shadow(0 0 8px var(--fresh-live));
+      animation: marker-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes marker-pulse {
+      0%, 100% { transform: scale(1);    }
+      50%      { transform: scale(1.16); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .drone-marker.live svg { animation: none; }
     }
     /* Pulse rule applies to the INNER dot, NOT the Leaflet wrapper.
        Leaflet positions markers via transform: translate3d() on the
@@ -714,13 +1143,54 @@
 </head>
 <body>
   <!-- Header -->
+  <!-- Brand artwork, defined ONCE. Both visible instances below are <use>
+       references, so a future revision is a single edit rather than the
+       three near-identical copies this replaced. Stroke is currentColor so
+       the color comes from --brand via CSS, not a hardcoded hex. -->
+  <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true"
+       style="position:absolute">
+    <symbol id="brand-plane" viewBox="65 200 250 245">
+      <g fill="none" stroke="currentColor" stroke-width="15"
+         stroke-linecap="round" stroke-linejoin="round"
+         transform="translate(-35 2.5)">
+        <path d="M283.2 351.8 L250 420 L216 330 L120 300 L192.8 266.6 L247.4 241.6 L302 216.5 L268 274 L333 249.5 L308.1 300.7 Z"/>
+        <path d="M216 330 L268 274"/>
+      </g>
+    </symbol>
+    <symbol id="ic-bluetooth" viewBox="0 0 24 24">
+      <path d="M6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5" fill="none"
+            stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ic-wifi" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+        <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+        <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+        <path d="M12 20h.01"/>
+      </g>
+    </symbol>
+    <symbol id="ic-pin" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
+        <circle cx="12" cy="10" r="3"/>
+      </g>
+    </symbol>
+    <symbol id="ic-gps" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="7"/>
+        <path d="M12 1v3M12 20v3M1 12h3M20 12h3"/>
+        <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/>
+      </g>
+    </symbol>
+  </svg>
+
   <div class="header">
     <a href="/" class="brand-wordmark" title="DroneAware Local Viewer">
-      <!-- Brand mark SVG: paper airplane, green #10b981 (fixed) -->
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-        <path d="M22 2L11 13" stroke="#10b981" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="#10b981" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-      </svg>
+      <svg role="img" aria-label="DroneAware"><use href="#brand-plane"/></svg>
       <span><span class="brand-name">DroneAware</span><span class="brand-tld">.io</span></span>
     </a>
     <div class="header-center">
@@ -733,8 +1203,11 @@
       </span>
     </div>
     <div class="header-right">
+      <button class="icon-btn" id="btn-replay" title="Replay recorded history"
+              aria-label="Replay" aria-expanded="false" style="font-size: 16px;">↺</button>
       <button class="icon-btn" id="btn-units" title="Toggle units (imperial / metric)" aria-label="Toggle units" style="font-size: 12px; font-weight: 700; letter-spacing: 0.5px;">ft</button>
       <button class="icon-btn" id="btn-theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
+      <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings" style="font-size: 17px;">☰</button>
     </div>
   </div>
 
@@ -747,19 +1220,24 @@
            check for BLE). -->
       <div class="feeders-panel" id="feeders-panel">
         <div class="feeder-row" data-feeder="ble">
-          <span class="feeder-icon">📶</span>
+          <svg class="feeder-icon ic-ble"><use href="#ic-bluetooth"/></svg>
           <span class="feeder-label">BLE</span>
           <span class="feeder-status" data-role="ble-status">—</span>
         </div>
         <div class="feeder-row" data-feeder="wifi_2g">
-          <span class="feeder-icon">📡</span>
+          <svg class="feeder-icon ic-wifi"><use href="#ic-wifi"/></svg>
           <span class="feeder-label">2.4 GHz</span>
           <span class="feeder-status" data-role="wifi_2g-status">—</span>
         </div>
         <div class="feeder-row" data-feeder="wifi_5g">
-          <span class="feeder-icon">📡</span>
+          <svg class="feeder-icon ic-wifi"><use href="#ic-wifi"/></svg>
           <span class="feeder-label">5 GHz</span>
           <span class="feeder-status" data-role="wifi_5g-status">—</span>
+        </div>
+        <div class="feeder-row" data-feeder="location" id="row-location" hidden>
+          <svg class="health-icon ic-loc" id="loc-icon"><use href="#ic-pin"/></svg>
+          <span class="feeder-label" id="loc-label">Location</span>
+          <span class="feeder-status mono" id="loc-value">—</span>
         </div>
       </div>
       <div class="sidebar-filters">
@@ -778,10 +1256,7 @@
       </div>
       <div class="sidebar-list" id="sidebar-list">
         <div class="empty" id="empty-state">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-            <path d="M22 2L11 13" stroke="#10b981" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="#10b981" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-          </svg>
+          <svg aria-hidden="true"><use href="#brand-plane"/></svg>
           <div class="title">No drones detected</div>
           <div class="sub">Your node is scanning.</div>
         </div>
@@ -816,7 +1291,57 @@
         </div>
       </div>
     </div>
-    <div class="map" id="map"></div>
+    <div class="map-wrap">
+      <!-- Replay. Hidden until the ⏱ button is pressed, because a node with no
+           recorded history has nothing to scrub and an always-visible slider
+           would be a control that does nothing. -->
+      <div class="replay-bar" id="replay-bar" hidden>
+        <div class="replay-head">
+          <span class="replay-title">REPLAY</span>
+          <span class="replay-window" id="replay-window">—</span>
+          <button class="btn-inline" id="replay-reset" type="button">Reset</button>
+          <button class="icon-btn" id="replay-close" type="button"
+                  title="Close replay" aria-label="Close replay">✕</button>
+        </div>
+        <div class="replay-slider" id="replay-slider">
+          <div class="replay-track" id="replay-track"></div>
+          <input type="range" id="replay-from" min="0" max="1000" value="0"
+                 aria-label="Start of replay window">
+          <input type="range" id="replay-to" min="0" max="1000" value="1000"
+                 aria-label="End of replay window">
+        </div>
+        <div class="replay-foot">
+          <span id="replay-left">—</span>
+          <span class="replay-key">
+            <i class="k-det"></i>detections
+            <i class="k-live"></i>listening
+            <i class="k-gap"></i>not recording
+          </span>
+          <span id="replay-right">Now</span>
+        </div>
+        <p class="replay-note" id="replay-note" hidden></p>
+      </div>
+      <div class="map" id="map"></div>
+    </div>
+  </div>
+
+  <!-- Confirm before powering down. Centred over whatever is on screen,
+       because this is the one control here that cannot be undone from the
+       same browser: the page it was pressed from will stop answering. -->
+  <div class="confirm-backdrop" id="confirm-backdrop" hidden>
+    <div class="confirm-box" role="dialog" aria-modal="true"
+         aria-labelledby="confirm-title">
+      <h3 id="confirm-title">Shut down this node?</h3>
+      <p id="confirm-body">
+        The feeders stop cleanly and the node powers off. Everything it has
+        recorded is saved to disk first, so nothing is lost. To start it again
+        you will need to unplug it and plug it back in.
+      </p>
+      <div class="confirm-actions">
+        <button class="btn-inline" id="confirm-cancel" type="button">Cancel</button>
+        <button class="btn-danger" id="confirm-ok" type="button">Shut down</button>
+      </div>
+    </div>
   </div>
 
   <!-- Status bar -->
@@ -841,7 +1366,104 @@
   <div class="toast-container" id="toast-container"></div>
 
   <!-- Bundled Leaflet -->
+  <!-- Settings panel (v1.6.0). Click-outside-to-close matches the public
+       site's share modal. -->
+  <div class="settings-backdrop" id="settings-backdrop">
+    <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <button class="settings-close" id="settings-close" aria-label="Close">&times;</button>
+      <h2 id="settings-title">Settings</h2>
+
+      <div class="settings-tabs" role="tablist">
+        <button class="settings-tab is-active" id="tab-map" data-page="map"
+                role="tab" aria-selected="true" aria-controls="page-map">Map</button>
+        <button class="settings-tab" id="tab-node" data-page="node"
+                role="tab" aria-selected="false" aria-controls="page-node">Node</button>
+      </div>
+
+      <section class="settings-page" id="page-map" role="tabpanel" aria-labelledby="tab-map">
+      <!-- First thing on the first page, deliberately. Settings get configured
+           once; shutting down happens every time the node is packed away, and
+           it is the one action you want in reach rather than at the end of a
+           scroll. The explanation lives in the confirmation, where it is read
+           at the moment it matters instead of sitting under a button. -->
+      <div class="danger-row">
+        <button class="btn-danger" id="cfg-shutdown" type="button">Shut down node</button>
+      </div>
+
+      <p class="lede">
+        This node ships a world overview that is deliberately coarse. Download
+        detail for your own area so the map still works with no internet.
+      </p>
+
+      <div class="field">
+        <!-- Default covers the outermost distance ring. Below that the
+             basemap stops exactly where the rings are still drawn, which
+             reads as a broken map rather than a small download. -->
+        <label for="om-radius">Area around the node <b><span id="om-radius-val">20</span> km</b></label>
+        <input type="range" id="om-radius" min="1" max="30" step="1" value="20">
+      </div>
+
+      <div class="field">
+        <label>Center <b id="om-center-src">node location</b></label>
+        <!-- Read-only here on purpose. The node's position is node
+             configuration, not a map setting, so it is edited in one
+             place — the Node tab — rather than in two that can disagree. -->
+        <div class="coord-row">
+          <span class="coord-readout mono" id="om-center">—</span>
+          <button class="btn-inline" id="om-edit-center" type="button">Edit</button>
+        </div>
+      </div>
+
+      <div class="estimate-box">
+        <!-- Three densities, not one number. Measured spread at the same
+             radius is ~47x between open country and a dense city, so a
+             single figure would be wrong nearly everywhere. -->
+        <div class="estimate-row"><span>Download size</span><b id="om-size">—</b></div>
+        <div class="estimate-row"><span>Map tiles</span><b id="om-tiles">—</b></div>
+        <div class="estimate-row"><span>Free space</span><b id="om-free">—</b></div>
+        <div class="verdict" id="om-verdict">
+          <span class="mark" id="om-mark"></span>
+          <span id="om-verdict-text">Checking…</span>
+        </div>
+      </div>
+
+      <button class="btn-download" id="om-download" disabled>Download offline map</button>
+      </section>
+
+      <section class="settings-page" id="page-node" role="tabpanel"
+               aria-labelledby="tab-node" hidden>
+        <div class="node-ident">
+          <span class="node-ident-label">Editing node</span>
+          <span class="node-ident-id mono" id="cfg-node-id">—</span>
+        </div>
+
+        <div id="cfg-form"></div>
+
+        <button class="btn-download" id="cfg-save">Save changes</button>
+
+        <!-- Shutting down cleanly is what makes the detection database
+             survive being moved: systemd sends SIGTERM, the feeders flush
+             what they are holding to disk, and nothing is lost. For the
+             operator carrying a node in a vehicle with no keyboard on it. -->
+      </section>
+
+      <!-- Shown INSTEAD of the pages while picking a location on the map.
+           The panel shrinks to this bar so the map underneath is tappable. -->
+      <div class="pick-bar" id="pick-bar">
+        <div class="pick-text">
+          <div class="pick-title">Tap the map to place this node</div>
+          <div class="pick-coords mono" id="pick-coords">nothing selected yet</div>
+        </div>
+        <button class="btn-inline" id="pick-cancel" type="button">Cancel</button>
+        <button class="btn-inline btn-primary" id="pick-update" type="button" disabled>Update</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/leaflet.js"></script>
+  <!-- Vector renderer for Protomaps region packs. Vendored, not CDN — this
+       UI has to work with no internet, which is the whole point of it. -->
+  <script src="/static/protomaps-leaflet.js"></script>
 
   <script>
     "use strict";
@@ -852,7 +1474,29 @@
        ========================================================================= */
 
     // FA paper-plane SVG (drone marker) — color via currentColor.
-    const DRONE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="currentColor"><path d="M498.1 5.6c10.1 7 15.4 19.1 13.5 31.2l-64 416c-1.5 9.7-7.4 18.2-16 23s-18.9 5.4-28 1.6L284 427.7l-68.5 74.1c-8.9 9.7-22.9 12.9-35.2 8.1S160 493.2 160 480V396.4c0-4 1.5-7.8 4.2-10.7L331.8 202.8c5.8-6.3 5.6-16-.4-22s-15.7-6.4-22-.7L106 360.8 17.7 316.6C7.1 311.3 .3 300.7 0 288.9s5.9-22.8 16.1-28.7l448-256c10.7-6.1 23.9-5.5 34 1.4z"/></svg>`;
+    // Map marker: the DroneAware mark, with its two wings drawn separately.
+    //
+    // The logo as drawn is a stroked outline. That is right for a wordmark and
+    // wrong for a 16px marker — the colour ends up carried by a ~1.5px line,
+    // and on this map the colour IS the message (live / recent / older).
+    // Filling it solid fixes legibility but flattens the dart into a blob.
+    //
+    // Splitting at the fold line the logo already has (216,330 -> 268,274, both
+    // existing vertices, so the two halves tile the shape exactly) gets both:
+    // the leading wing solid, the trailing wing at 40% of the SAME hue. The
+    // fold reads, and every pixel of the icon still carries the recency colour
+    // rather than sharing it with a second one.
+    //
+    // Points north at -45deg, the same offset the Font Awesome plane needed,
+    // so the heading maths below is unchanged.
+    const BRAND_WING_LEAD  = "M216 330 L120 300 L192.8 266.6 L247.4 241.6 L302 216.5 L268 274 Z";
+    const BRAND_WING_TRAIL = "M268 274 L333 249.5 L308.1 300.7 L283.2 351.8 L250 420 L216 330 Z";
+    const BRAND_DRONE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="65 200 250 245">`
+      + `<g transform="translate(-35 2.5)" stroke-linejoin="round" stroke="currentColor" fill="currentColor">`
+      + `<path d="${BRAND_WING_TRAIL}" fill-opacity="0.4" stroke-opacity="0.4" stroke-width="8"/>`
+      + `<path d="${BRAND_WING_LEAD}" stroke-width="8"/>`
+      + `</g></svg>`;
+
 
     // Freshness scale matches the public droneaware.io/live.html — three tiers
     // (< 2 min / < 10 min / > 10 min) so operators see the same color story
@@ -869,6 +1513,8 @@
     /* ----- State ----- */
     const state = {
       macs: new Map(),               // mac -> { event, first_seen, last_seen, marker, card, trail, polyline, showTrail, opMarker, connector }
+      // nodeClockOffset = node time - browser time, in seconds. See nodeNow().
+      nodeClockOffset: 0,
       filters: {
         freshness: new Set(["live", "recent", "older"]),
         radio:     new Set(["wifi", "ble"]),
@@ -877,14 +1523,10 @@
       selectedMac: null,
       sse: null,
       map: null,
-      // Tile source state — "cartocdn" (online, default) or "local"
-      // (offline bundle served by web_ui from MBTiles). Resolved by
-      // navigator.onLine at startup, then maintained by online/offline
-      // window events + Leaflet tileerror auto-swap. tilesLocalAvailable
-      // is set from /api/status at startup so we don't try to swap to a
-      // bundle that doesn't exist on this node.
-      tileSource: (typeof navigator !== "undefined" && navigator.onLine === false) ? "local" : "cartocdn",
-      tilesLocalAvailable: false,
+      // Which basemap the node reports it can draw: "region", "proxy",
+      // "world" or "none". The node decides; the client renders whatever
+      // /map.pmtiles gives it.
+      mapPackAvailable: false,
       // Display units: "imperial" (ft AGL / mph / mi rings) or "metric"
       // (m AGL / km/h / km rings). Persisted per-browser in localStorage.
       // Default imperial — matches US operator majority; international
@@ -901,6 +1543,31 @@
       for (const f of FRESHNESS) if (ageSec < f.maxAge) return f;
       return { tier: "gray", color: "var(--fresh-gray)", label: "GRAY" };
     }
+    // 🚨 Every age on this page is measured against the NODE's clock, never
+    // the browser's. last_seen is stamped by the feeder when it captured the
+    // packet, so subtracting a browser Date.now() measures the gap between two
+    // machines' clocks as well as the true age of the detection.
+    //
+    // That is not hypothetical. A Raspberry Pi has no RTC, and a node used
+    // offline — the case this whole UI exists for — has no NTP either, so its
+    // clock resumes from whatever was last written to disk. A node that spent
+    // an hour powered off comes back an hour behind the phone looking at it,
+    // and every live aircraft renders as "1h ago" in both the age text and the
+    // freshness colour while its marker moves across the map. Reported from
+    // the field 2026-09-09 and reproduced exactly at 1h 19m of skew.
+    //
+    // Re-measured on every status poll, so it tracks the node's clock being
+    // corrected by NTP mid-session. Request latency inflates it — single-digit
+    // milliseconds on a LAN, against a 60-second LIVE threshold.
+    function nodeNow() {
+      return Date.now() / 1000 + state.nodeClockOffset;
+    }
+
+    function setNodeClock(nodeTime) {
+      if (typeof nodeTime !== "number" || !isFinite(nodeTime)) return;
+      state.nodeClockOffset = nodeTime - Date.now() / 1000;
+    }
+
     function relTime(secAgo) {
       if (secAgo < 60)  return Math.floor(secAgo) + "s ago";
       if (secAgo < 3600) return Math.floor(secAgo / 60) + "m ago";
@@ -920,84 +1587,40 @@
       return id.startsWith("TEST-") || id.startsWith("DA-TEST") || (evt.mac || "").startsWith("00:00:00");
     }
 
-    /* ----- Map init ----- */
-    // Two tile sources × two themes. CartoDB (live, "cartocdn") is the
-    // primary — full street-level detail any zoom, requires browser to
-    // reach basemaps.cartocdn.com. Local bundle ("local") is the offline
-    // fallback served by web_ui from a bundled MBTiles file (zoom 0-6
-    // worldwide, Dark Matter style only — day variant uses the dark
-    // tiles too since we don't bundle Positron). Active source is
-    // chosen by navigator.onLine + tileerror auto-swap; see below.
-    const TILE_URLS = {
-      cartocdn: {
-        dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-        day:  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-      },
-      local: {
-        // Bundle is dark-only by design — keeps the binary lean
-        // (~15 MB vs ~30 MB for both). Day-mode toggle while offline
-        // leaves the basemap on Dark Matter; everything else (chrome,
-        // popups, sidebar) still flips to day colors.
-        dark: "/tiles/{z}/{x}/{y}.png",
-        day:  "/tiles/{z}/{x}/{y}.png",
-      },
-    };
-    const LOCAL_TILES_MAX_ZOOM = 6;
+    /* ----- Map init -----
+       Two sources, both ours. The vector basemap comes from a PMTiles
+       archive — a downloaded region pack when one exists, otherwise
+       streamed through this node from tiles.droneaware.io. The bundled
+       zoom 0-6 raster world is the last resort when neither is available.
+
+       CartoDB was removed here: it watermarks unregistered use, and every
+       node with internet was pointing browsers at it. */
 
     function applyMapTheme() {
       const theme = document.documentElement.dataset.theme || "dark";
-      const source = state.tileSource || "cartocdn";
-      const url = TILE_URLS[source][theme];
-
       if (state.tileLayer) state.map.removeLayer(state.tileLayer);
 
-      const opts = {
-        attribution: source === "cartocdn"
-          ? '&copy; OpenStreetMap &copy; CARTO'
-          : '&copy; OpenStreetMap &copy; CARTO (offline bundle)',
-        maxZoom: 19,
-      };
-      if (source === "cartocdn") {
-        opts.subdomains = "abcd";
-      } else {
-        // Bundle only covers zoom 0-6. Leaflet's maxNativeZoom tells it
-        // to keep using zoom-6 tiles for higher zoom levels, scaling
-        // them up (blurry but positioned correctly). Drone markers and
-        // distance rings still place accurately — basemap just degrades.
-        opts.maxNativeZoom = LOCAL_TILES_MAX_ZOOM;
+      // Vector wins whenever it is available. One archive covers every zoom
+      // and both themes — the flavor is a render option, not a second
+      // download. protomaps-leaflet supplies its own
+      // "Protomaps © OpenStreetMap" attribution, which is what ODbL
+      // requires; do not hand-roll it here.
+      if (state.mapPackAvailable) {
+        state.tileLayer = protomapsL.leafletLayer({
+          url: "/map.pmtiles",
+          flavor: theme === "day" ? "light" : "dark",
+          lang: "en",
+        }).addTo(state.map);
+        if (state.home) drawHomeView(state.home);
+        return;
       }
 
-      state.tileLayer = L.tileLayer(url, opts).addTo(state.map);
-
-      // Rings are Canvas-painted, so a theme swap does not restyle them the
-      // way it does the CSS-driven chrome. Redraw so the stroke colour
-      // follows the new basemap instead of staying tuned to the old one.
+      // Nothing to draw. The node reports map_pack=false only when it has
+      // no region pack, no world pack and cannot reach the tile host — so
+      // there is no basemap to fall back TO. Markers, tracks and distance
+      // rings still position correctly on an empty canvas, which is the
+      // honest result rather than a stale or third-party layer.
       if (state.home) drawHomeView(state.home);
-
-      // Listen for tile load failures on the CartoDB layer — first
-      // failure swaps us to the local bundle. Covers the case where
-      // navigator.onLine reports true but the browser can't actually
-      // reach CartoDB (corporate firewall, captive portal, etc.).
-      // Local layer can't fail meaningfully — it's served by the same
-      // Pi the operator is already connected to — so no handler there.
-      if (source === "cartocdn") {
-        state.tileLayer.on("tileerror", switchToLocalTiles);
-      }
-    }
-
-    function switchToLocalTiles() {
-      if (state.tileSource === "local") return;
-      if (!state.tilesLocalAvailable) return;  // no bundle on this node
-      console.info("[map] Switching to bundled offline tiles");
-      state.tileSource = "local";
-      applyMapTheme();
-    }
-
-    function switchToCartoDBTiles() {
-      if (state.tileSource === "cartocdn") return;
-      console.info("[map] Network back — switching to CartoDB tiles");
-      state.tileSource = "cartocdn";
-      applyMapTheme();
     }
 
     // Above this zoom level, the distance rings + labels are hidden from
@@ -1024,7 +1647,14 @@
       });
       state.map = m;
       state.homeLayer = L.layerGroup().addTo(m);   // holds home marker + rings
-      applyMapTheme();
+      // Deliberately NOT applying a basemap here. Which one is correct
+      // depends on whether this node has a pack or can reach the tile host,
+      // and only /api/status knows. The first status response applies it;
+      // this timeout is the backstop for a status call that never returns,
+      // so the map is never permanently blank.
+      state.basemapTimer = setTimeout(() => {
+        if (!state.tileLayer) applyMapTheme();
+      }, 4000);
 
       // Hide the home layer (rings + labels + home marker) at street-level
       // zoom. Layer membership is preserved so re-attaching restores
@@ -1049,6 +1679,13 @@
     const MILE_METERS = 1609.344;
     const KM_METERS = 1000;
     const RING_COUNT = 10;
+    // Which distance ring the map frames on first load. Ten rings zoomed to
+    // fit puts the node in a county-wide view where nothing is legible;
+    // three is close enough to read streets while still showing more area
+    // than a drone is likely to be detected in.
+    const DEFAULT_RING_FIT = 3;
+    // Deepest zoom the coarse world pack carries geometry for.
+    const WORLD_PACK_MAX_ZOOM = 6;
 
     // Distance-ring stroke for the active theme. The map uses
     // preferCanvas:true, so ring strokes are painted to a <canvas> and CSS
@@ -1076,15 +1713,32 @@
       state.homeLayer.clearLayers();
       const center = [home.lat, home.lon];
 
+      const stepMeters = state.units === "metric" ? KM_METERS : MILE_METERS;
+      const unitLabel  = state.units === "metric" ? "km" : "mi";
+
       // Recenter + zoom the map on the FIRST home draw only. On mobile
       // nodes the GPS fix updates every ~2s and re-calling setView here
       // would wipe out any manual pan/zoom the operator has done. The
       // rings/marker below still redraw at the new position, so the map
       // stays accurate — the user's chosen view just isn't blown away.
-      if (isFirstDraw) state.map.setView(center, 11);
-
-      const stepMeters = state.units === "metric" ? KM_METERS : MILE_METERS;
-      const unitLabel  = state.units === "metric" ? "km" : "mi";
+      //
+      // Frame the DEFAULT_RING_FIT ring rather than hardcoding a zoom
+      // number: the right zoom depends on the viewport, and a phone and a
+      // desktop do not agree on it. toBounds() takes the full width of the
+      // box, so it is the ring's diameter, not its radius.
+      if (isFirstDraw) {
+        // toBounds() takes the full width of the box, so it is the ring's
+        // diameter, not its radius. Viewport-relative rather than a
+        // hardcoded zoom number, so it lands sensibly on a phone too.
+        const fit = L.latLng(center).toBounds(2 * DEFAULT_RING_FIT * stepMeters);
+        let z = state.map.getBoundsZoom(fit, true);
+        // The world pack stops at zoom 5. Opening on the 3-mile ring would
+        // put the operator on an empty canvas — there is simply no geometry
+        // at that scale in a world overview. Pull back to where it has
+        // something to draw; a region pack or the proxy has no such limit.
+        if (state.mapSource === "world") z = Math.min(z, WORLD_PACK_MAX_ZOOM);
+        state.map.setView(center, z);
+      }
       const ring       = ringStyle();
 
       // Concentric distance rings, dashed. Colour comes from the active
@@ -1133,11 +1787,11 @@
 
     /* ----- Markers ----- */
     function makeDroneIcon(color, isLive, heading) {
-      const tilt = (heading || 0) - 45;  // FA paper-plane "forward" is upper-right
+      const tilt = (heading || 0) - 45;  // the mark's nose sits upper-right
       const cls = "drone-marker" + (isLive ? " live" : "");
       return L.divIcon({
         className: cls,
-        html: `<div style="color: ${color}; transform: rotate(${tilt}deg);">${DRONE_SVG}</div>`,
+        html: `<div style="color: ${color}; transform: rotate(${tilt}deg);">${BRAND_DRONE_SVG}</div>`,
         iconSize: [40, 40],
         iconAnchor: [20, 20],
       });
@@ -1151,12 +1805,15 @@
     // maintain — currently 10,000 (~2.8h of visible flight at 1 Hz).
     const TRAIL_MAX = 10000;
 
-    function appendTrail(entry, lat, lon) {
+    function appendTrail(entry, lat, lon, alt) {
       if (!entry.trail) entry.trail = [];
       // Skip dupes (same lat/lon as last point — no movement, no new vertex)
       const last = entry.trail[entry.trail.length - 1];
       if (last && last[0] === lat && last[1] === lon) return;
-      entry.trail.push([lat, lon]);
+      // Third element is altitude. Leaflet takes [lat, lng, alt] triples
+      // anywhere it takes a LatLng, so the path carries the height it needs
+      // for the altitude dots without a second parallel array.
+      entry.trail.push([lat, lon, (typeof alt === "number") ? alt : null]);
       if (entry.trail.length > TRAIL_MAX) entry.trail.shift();
     }
 
@@ -1168,7 +1825,7 @@
       const lon = evt.lon || evt.longitude;
       if (typeof lat !== "number" || typeof lon !== "number") return;
 
-      const age = (Date.now() / 1000) - entry.last_seen;
+      const age = nodeNow() - entry.last_seen;
       const f = freshnessFor(age);
       const icon = makeDroneIcon(f.color, f.tier === "live", evt.heading || evt.hdg || 0);
 
@@ -1211,7 +1868,7 @@
       // the "Show Flight Path" button in the drone popup. The trail
       // array stays current either way, so the polyline appears with
       // full history the moment the user toggles it on.
-      appendTrail(entry, lat, lon);
+      appendTrail(entry, lat, lon, altitudeSource(evt));
       if (entry.showTrail) renderTrailPolyline(entry, f.color);
 
       // Operator location ("H" marker) + dashed connector to the drone,
@@ -1256,7 +1913,7 @@
     function removeMarker(mac) {
       const entry = state.macs.get(mac);
       if (entry) {
-        for (const k of ["marker", "polyline", "opMarker", "connector"]) {
+        for (const k of ["marker", "polyline", "waypoints", "opMarker", "connector"]) {
           if (entry[k]) {
             state.map.removeLayer(entry[k]);
             entry[k] = null;
@@ -1271,7 +1928,7 @@
       const entry = state.macs.get(mac);
       if (!entry) return;
       const evt = entry.event;
-      const age = (Date.now() / 1000) - entry.last_seen;
+      const age = nodeNow() - entry.last_seen;
       const f = freshnessFor(age);
       // Normalize radio for display: wifi_beacon / wifi_nan / wifi all
       // render as "WIFI"; ble renders as "BLE". Keeps the card visually
@@ -1318,7 +1975,7 @@
         : "";
 
       card.innerHTML = `
-        <div class="card-thumb" style="color: ${f.color};">${DRONE_SVG}</div>
+        <div class="card-thumb" style="color: ${f.color};">${BRAND_DRONE_SVG}</div>
         <div class="card-body">
           <div class="card-row">
             <div class="card-id mono">${escapeHtml(id)}</div>
@@ -1359,7 +2016,7 @@
       );
       for (const [mac, entry] of sorted) {
         const evt = entry.event;
-        const age = (Date.now() / 1000) - entry.last_seen;
+        const age = nodeNow() - entry.last_seen;
         const tier = freshnessFor(age).tier;
         const radio = (evt.radio || "").toLowerCase();
         // Normalize radio variants: LocalPublisher emits "wifi_beacon",
@@ -1443,6 +2100,10 @@
     }
 
     function handleEvent(evt) {
+      // While the map is showing recorded history, a live detection arriving
+      // over SSE would drop a "now" aircraft into an hour-old scene. The node
+      // keeps recording either way; hide() reloads the live picture from it.
+      if (replay.active) return;
       const mac = evt.mac || evt.source_mac;
       if (!mac) return;
       classifyIds(evt);
@@ -1462,7 +2123,7 @@
         const parsed = Date.parse(eventTs);
         eventTs = Number.isNaN(parsed) ? null : parsed / 1000;
       }
-      if (typeof eventTs !== "number") eventTs = Date.now() / 1000;
+      if (typeof eventTs !== "number") eventTs = nodeNow();
       let entry = state.macs.get(mac);
       if (!entry) {
         entry = { event: evt, first_seen: eventTs, last_seen: eventTs, marker: null, card: null };
@@ -1487,6 +2148,8 @@
     }
 
     function handleSnapshot(snap) {
+      // snapshot_at is the node's wall clock when it built this response.
+      setNodeClock(snap.snapshot_at);
       for (const m of (snap.macs || [])) {
         const evt = m.latest;
         if (!evt) continue;
@@ -1507,9 +2170,332 @@
       }
     }
 
+    /* ----- Replay -------------------------------------------------------
+       A PERIOD, not a moment. The server's history page uses a moment
+       scrubber with jump-to-next-detection arrows because it spans all of
+       time and every node, so you have to hunt for where the data is. A node
+       does not have that problem: its history is bounded and knowable, so the
+       slider's own extent answers "how much do I have", and the painted track
+       answers "where is anything". Two handles also match how people describe
+       this — "yesterday evening's flight", not "21:07:00".
+
+       🚨 Labels are RELATIVE by default and only become calendar dates when
+       the node's clock is actually disciplined. A Pi has no RTC and an offline
+       node has no NTP, so its clock can be hours or days out. "3h ago" stays
+       true on such a node because both ends of the subtraction come from the
+       same clock; "14:32 on the 9th" does not. Printing a date the node cannot
+       stand behind is worse than printing no date at all. */
+    const replay = {
+      bounds: null,
+      from: 0, to: 0,          // node-clock seconds
+      open: false,
+      active: false,           // true while the map is showing history
+      loading: false,
+      savedFreshness: null,
+
+      async show() {
+        const bar = document.getElementById("replay-bar");
+        let b;
+        try {
+          b = await (await fetch("/api/history/bounds")).json();
+        } catch (e) {
+          return replay.unavailable("Could not read the node's history.");
+        }
+        if (b.error) return replay.unavailable(b.detail || "History unavailable.");
+        replay.bounds = b;
+        setNodeClock(b.now);
+
+        // No history is a real answer, not an error. Say why rather than
+        // showing a slider with nothing behind it.
+        if (!b.oldest || !b.newest || b.newest <= b.oldest) {
+          return replay.unavailable(
+            "This node has not recorded any history yet. Detections are saved "
+            + "to disk as they arrive; come back once it has been running.");
+        }
+        bar.hidden = false;
+        replay.open = true;
+        document.getElementById("btn-replay").setAttribute("aria-expanded", "true");
+        replay.reset();
+        // Leaflet sizes itself to its container, which just got shorter.
+        if (state.map) setTimeout(() => state.map.invalidateSize(), 60);
+      },
+
+      unavailable(msg) {
+        const bar = document.getElementById("replay-bar");
+        bar.hidden = false;
+        replay.open = true;
+        document.getElementById("replay-slider").style.display = "none";
+        document.getElementById("replay-foot") &&
+          (document.getElementById("replay-foot").style.display = "none");
+        replay.note(msg, true);
+      },
+
+      async hide() {
+        document.getElementById("replay-bar").hidden = true;
+        replay.open = false;
+        document.getElementById("btn-replay").setAttribute("aria-expanded", "false");
+        if (replay.active) {
+          replay.active = false;
+          if (replay.savedFreshness) state.filters.freshness = replay.savedFreshness;
+          replay.savedFreshness = null;
+          // Rebuild from the node rather than from whatever the page happened
+          // to be holding before: SSE was ignored throughout replay, so the
+          // in-page picture is stale by exactly the length of the detour.
+          replay.clearView();
+          try {
+            const r = await fetch("/api/detections");
+            if (r.ok) handleSnapshot(await r.json());
+          } catch (e) {}
+          applyFilters();
+        }
+        if (state.map) setTimeout(() => state.map.invalidateSize(), 60);
+      },
+
+      reset() {
+        const b = replay.bounds;
+        if (!b) return;
+        replay.from = b.oldest;
+        replay.to = b.newest;
+        document.getElementById("replay-from").value = 0;
+        document.getElementById("replay-to").value = 1000;
+        replay.paint();
+        replay.render();
+        replay.load();
+      },
+
+      // Slider positions are 0-1000 over the node's own extent, so the handles
+      // cannot select a period the node has no data for.
+      posToTime(pos) {
+        const b = replay.bounds;
+        return b.oldest + (b.newest - b.oldest) * (pos / 1000);
+      },
+
+      async paint() {
+        const b = replay.bounds;
+        const el = document.getElementById("replay-track");
+        const cols = Math.max(60, Math.min(Math.round(el.clientWidth || 600), 1200));
+        let tones;
+        try {
+          const r = await fetch(
+            `/api/history/track?from=${b.oldest}&to=${b.newest}&columns=${cols}`);
+          tones = (await r.json()).tones || [];
+        } catch (e) { return; }
+        // Painted as a hard-stop gradient: one paint for the whole track
+        // rather than a thousand elements, and it survives a resize.
+        const TONE = ["transparent", "#3f6f8c", "var(--accent)"];
+        const n = tones.length || 1;
+        const stops = [];
+        for (let i = 0; i < n; i++) {
+          const a = (i * 100 / n).toFixed(3), z = ((i + 1) * 100 / n).toFixed(3);
+          stops.push(`${TONE[tones[i]] || "transparent"} ${a}% ${z}%`);
+        }
+        el.style.background = `linear-gradient(to right, ${stops.join(",")})`;
+      },
+
+      render() {
+        const b = replay.bounds;
+        const synced = !!b.clock_synced;
+        const now = nodeNow();
+
+        // The ends of the track: how far back the history goes, and "Now".
+        document.getElementById("replay-left").textContent =
+          relTime(now - b.oldest).replace(" ago", " ago");
+        document.getElementById("replay-right").textContent =
+          (now - b.newest) < 120 ? "Now" : relTime(now - b.newest);
+
+        // The selected window. Relative always; a real date only when the
+        // node's clock has been disciplined by a time source.
+        const span = replay.to - replay.from;
+        let text = `${relTime(now - replay.from)} → `
+                 + (((now - replay.to) < 120) ? "now" : relTime(now - replay.to))
+                 + `  ·  ${fmtSpan(span)} selected`;
+        if (synced) text += `  ·  ${fmtAbsRange(replay.from, replay.to)}`;
+        document.getElementById("replay-window").textContent = text;
+
+        replay.note(synced ? "" :
+          "The node's clock has not been set from a time source, so these are "
+          + "shown as time before now rather than as dates. Ordering and "
+          + "durations are still exact.", false);
+      },
+
+      // Put the selected period on the map. The live view is replaced rather
+      // than overlaid: two sets of aircraft on one map, one from an hour ago
+      // and one from now, is not a picture anyone can read.
+      async load() {
+        if (!replay.bounds) return;
+        replay.loading = true;
+        let d;
+        try {
+          d = await (await fetch(
+            `/api/history/range?from=${replay.from}&to=${replay.to}`)).json();
+        } catch (e) {
+          replay.loading = false;
+          return replay.note("Could not read that period from the node.", true);
+        }
+        replay.loading = false;
+        if (d.error) return replay.note(d.detail || "Could not read that period.", true);
+
+        // Take over the live view. handleEvent() and the prune sweep both
+        // check replay.active, so nothing arriving over SSE disturbs this and
+        // nothing here gets pruned for being older than the stale window —
+        // which every historical record is, by definition.
+        if (!replay.active) {
+          replay.active = true;
+          replay.savedFreshness = new Set(state.filters.freshness);
+        }
+        // Historical records are old by definition, so the freshness chips
+        // would filter the entire result set away.
+        state.filters.freshness = new Set(["live", "recent", "older"]);
+
+        replay.clearView();
+
+        for (const evt of (d.events || [])) {
+          const mac = evt.mac;
+          if (!mac) continue;
+          const ts = typeof evt.t === "number" ? evt.t : replay.from;
+          let entry = state.macs.get(mac);
+          if (!entry) {
+            entry = { event: evt, first_seen: ts, last_seen: ts, trail: [],
+                      // On by default here, unlike the live view: the whole
+                      // reason to open replay is to see where something went.
+                      showTrail: true,
+                      marker: null, card: null, polyline: null,
+                      opMarker: null, connector: null };
+            state.macs.set(mac, entry);
+          } else {
+            entry.event = mergeNonNull(entry.event, evt);
+            if (ts > entry.last_seen) entry.last_seen = ts;
+            if (ts < entry.first_seen) entry.first_seen = ts;
+          }
+          if (typeof evt.lat === "number" && typeof evt.lon === "number") {
+            // Shared with the live path so replayed flights carry altitude
+            // and get the same hue-coded waypoint dots.
+            appendTrail(entry, evt.lat, evt.lon, altitudeSource(evt));
+          }
+          if (evt.serial_number) {
+            (entry.serials || (entry.serials = new Set())).add(evt.serial_number);
+          }
+        }
+        for (const mac of state.macs.keys()) { updateMarker(mac); renderCard(mac); }
+        applyFilters();
+
+        const n = state.macs.size;
+        if (n) {
+          replay.note(
+            `Showing ${d.count} recorded detection${d.count === 1 ? "" : "s"} `
+            + `from ${n} aircraft. Live view is paused.`
+            + (d.truncated ? " Only the first part of this period is shown — "
+                           + "narrow the window to see the rest." : ""), false);
+        } else {
+          // 🚨 "Nothing here" has two meanings and they are not the same
+          // answer. Saying "the node was listening" over a period when it was
+          // switched off reintroduces exactly the ambiguity the three-tone
+          // track exists to resolve — and it is the case this release is for:
+          // the drive out and back is not a quiet sky.
+          replay.note(await replay.whyEmpty(), false);
+        }
+      },
+
+      // removeMarker() only takes the marker off the map. The card is a DOM
+      // node parked in a tier bucket, so without this every window loaded
+      // leaves its cards behind and the sidebar accumulates aircraft the map
+      // is no longer showing.
+      clearView() {
+        for (const mac of [...state.macs.keys()]) {
+          const entry = state.macs.get(mac);
+          removeMarker(mac);
+          if (entry && entry.card && entry.card.parentNode) entry.card.remove();
+        }
+        state.macs.clear();
+      },
+
+      // Ask the track what the node was actually doing across this window,
+      // rather than assuming it was listening.
+      async whyEmpty() {
+        let tones = [];
+        try {
+          const r = await fetch(
+            `/api/history/track?from=${replay.from}&to=${replay.to}&columns=120`);
+          tones = (await r.json()).tones || [];
+        } catch (e) { /* fall through to the neutral wording */ }
+        const listening = tones.filter(t => t >= 1).length;
+        if (!tones.length) return "No detections recorded in that period.";
+        if (!listening) {
+          return "The node was not recording during this period — it was "
+               + "switched off, or its feeders were not running. This is not "
+               + "the same as a quiet sky.";
+        }
+        if (listening === tones.length) {
+          return "The node was recording throughout this period and heard "
+               + "nothing. The sky was quiet.";
+        }
+        const pct = Math.round(listening * 100 / tones.length);
+        return `The node was recording for about ${pct}% of this period and `
+             + "heard nothing; for the rest it was not recording at all.";
+      },
+
+      note(msg, bad) {
+        const el = document.getElementById("replay-note");
+        el.textContent = msg;
+        el.hidden = !msg;
+        el.style.color = bad ? "#F59E0B" : "";
+      },
+    };
+
+    function fmtSpan(sec) {
+      sec = Math.max(0, Math.round(sec));
+      const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      if (d) return `${d}d ${h}h`;
+      if (h) return `${h}h ${m}m`;
+      if (m) return `${m}m`;
+      return `${sec}s`;
+    }
+
+    // Only ever called when the node reports a disciplined clock.
+    function fmtAbsRange(t0, t1) {
+      const a = new Date(t0 * 1000), b = new Date(t1 * 1000);
+      const day = { month: "short", day: "numeric" };
+      const hm = { hour: "2-digit", minute: "2-digit" };
+      const sameDay = a.toDateString() === b.toDateString();
+      return sameDay
+        ? `${a.toLocaleDateString([], day)} ${a.toLocaleTimeString([], hm)}–${b.toLocaleTimeString([], hm)}`
+        : `${a.toLocaleDateString([], day)} ${a.toLocaleTimeString([], hm)} – `
+          + `${b.toLocaleDateString([], day)} ${b.toLocaleTimeString([], hm)}`;
+    }
+
+    function initReplay() {
+      const lo = document.getElementById("replay-from");
+      const hi = document.getElementById("replay-to");
+      const onInput = () => {
+        // Handles must not cross; whichever is being dragged pushes the other.
+        let a = Number(lo.value), z = Number(hi.value);
+        if (a > z) { const t = a; a = z; z = t; lo.value = a; hi.value = z; }
+        replay.from = replay.posToTime(a);
+        replay.to = replay.posToTime(z);
+        replay.render();
+      };
+      lo.addEventListener("input", onInput);
+      hi.addEventListener("input", onInput);
+      // Load on release. Fetching on every input event would fire a range
+      // query per pixel of drag.
+      lo.addEventListener("change", () => replay.load());
+      hi.addEventListener("change", () => replay.load());
+      document.getElementById("replay-reset").addEventListener("click", replay.reset);
+      document.getElementById("replay-close").addEventListener("click", replay.hide);
+      document.getElementById("btn-replay").addEventListener("click", () => {
+        replay.open ? replay.hide() : replay.show();
+      });
+      window.addEventListener("resize", () => { if (replay.open) replay.paint(); });
+    }
+
     /* ----- Freshness refresh + prune ----- */
     function refreshFreshness() {
-      const now = Date.now() / 1000;
+      // Every replayed record is older than the stale window — that is what
+      // makes it history — so the prune sweep would empty the map within a
+      // second of loading it.
+      if (replay.active) return;
+      const now = nodeNow();
       const toPrune = [];
       for (const [mac, entry] of state.macs) {
         const age = now - entry.last_seen;
@@ -1534,39 +2520,124 @@
        from /api/status.feeders. Mirrors My Nodes' visual layout so the
        operator sees consistent status whether they're on the online
        dashboard or the offline node UI. */
+    /* Mirrors nodes.html's node-card health block field for field, so an
+       operator reads the SAME sentence about their hardware on droneaware.io
+       and on the node itself. Colors, dots, wording and the strict === tests
+       are all taken from there deliberately — the two surfaces disagreeing is
+       precisely what confuses people when something is wrong.
+
+       Server source: nodes.html _bandRow() ~1001-1062, BLE block ~928-945. */
+    const HEALTH = {
+      ok:      "#10b981",
+      fault:   "#f87171",
+      unknown: "#475569",
+      stale:   "#fb923c",
+      meta:    "#64748b",
+    };
+    const MODE_DOT   = { lock: "\u25CF", dwell: "\u25D0", sweep: "\u25D1" };
+    const MODE_LABEL = {
+      dwell: " \u00B7 dwelling",
+      sweep: " \u00B7 sweeping",
+    };
+
+    function _statusEl(el, color, dot, text, meta) {
+      el.replaceChildren();
+      el.style.color = color;
+      if (dot) el.appendChild(document.createTextNode(dot + " "));
+      el.appendChild(document.createTextNode(text));
+      if (meta) {
+        const m = document.createElement("span");
+        m.className = "health-meta";
+        m.textContent = ` (${meta})`;
+        el.appendChild(m);
+      }
+    }
+
     function renderFeeders(feeders) {
       if (!feeders) return;
-      const bands = [
-        { key: "ble",     label: "BLE" },
-        { key: "wifi_2g", label: "2.4 GHz" },
-        { key: "wifi_5g", label: "5 GHz" },
-      ];
-      for (const {key} of bands) {
+
+      // ---- BLE -------------------------------------------------------------
+      const bleEl = document.querySelector('[data-role="ble-status"]');
+      const b = feeders.ble;
+      if (bleEl) {
+        if (!b) {
+          _statusEl(bleEl, HEALTH.unknown, "", "\u2014");
+        } else {
+          // === false throughout: a feeder older than v1.5.2.2 omits
+          // `scanning` entirely, and a falsy test would make every legacy
+          // node claim a broken radio.
+          const ok   = b.ble_ok;
+          const deaf = ok === true && b.scanning === false;
+          const where = b.adapter_bus === "onboard" ? " onboard"
+                      : b.adapter_bus === "usb"
+                          ? (b.adapter_usb_id ? " adapter " + b.adapter_usb_id : " adapter")
+                          : "";
+          const meta = b.adapter ? `${b.adapter}${where}` : "";
+          if (deaf)             _statusEl(bleEl, HEALTH.fault,   "", "Not scanning", meta);
+          else if (ok === true) _statusEl(bleEl, HEALTH.ok, "",
+                                  b.scanning === true ? "OK \u2014 scanning" : "OK", meta);
+          else if (ok === false) _statusEl(bleEl, HEALTH.fault, "",
+                                  b.ble_fault ? `Fault: ${b.ble_fault}` : "Fault", meta);
+          else                   _statusEl(bleEl, HEALTH.unknown, "", "\u2014", meta);
+        }
+      }
+
+      // ---- WiFi bands ------------------------------------------------------
+      for (const [key, band] of [["wifi_2g", "2g"], ["wifi_5g", "5g"]]) {
         const el = document.querySelector(`[data-role="${key}-status"]`);
         if (!el) continue;
         const f = feeders[key];
-        if (!f) { el.textContent = "unknown"; el.className = "feeder-status stale"; continue; }
+        if (!f) { _statusEl(el, HEALTH.unknown, "\u2022", "\u2014"); continue; }
+
+        // Locally this is the state file going stale; on the server it is the
+        // per-band freshness flag. Same failure either way: the feeder for
+        // this band has stopped reporting and its last value would otherwise
+        // sit there looking green.
         if (f.stale) {
-          el.textContent = `stale (${f.age_sec}s)`;
-          el.className = "feeder-status stale";
+          _statusEl(el, HEALTH.stale, "\u26A0",
+                    "Not reporting \u2014 feeder down", f.iface);
           continue;
         }
-        const mode = f.scan_mode || "?";
-        const iface = f.iface ? ` (${f.iface})` : "";
+        const mode = f.scan_mode;
         if (mode === "absent") {
-          el.textContent = `Absent — no capable adapter`;
-          el.className = "feeder-status absent";
-        } else if (f.wifi_fault) {
-          el.textContent = `Fault: ${f.wifi_fault}${iface}`;
-          el.className = "feeder-status fault";
+          // Never tag an absent row with an adapter.
+          _statusEl(el, HEALTH.unknown, "\u25CB", "Absent \u2014 no capable adapter");
+        } else if (f.wifi_ok === true) {
+          const lockLabel = band === "5g"
+            ? " \u00B7 continuous (149 lock)" : " \u00B7 continuous (ch 6 lock)";
+          const label = mode === "lock" ? lockLabel
+                      : MODE_LABEL[mode] !== undefined ? MODE_LABEL[mode]
+                      : (mode ? " \u00B7 " + mode : "");
+          _statusEl(el, HEALTH.ok, MODE_DOT[mode] || "\u2022", "OK" + label, f.iface);
         } else if (f.wifi_ok === false) {
-          el.textContent = `not scanning${iface}`;
-          el.className = "feeder-status warn";
+          _statusEl(el, HEALTH.fault, "\u25CF",
+                    f.wifi_fault ? `Fault: ${f.wifi_fault}` : "Fault", f.iface);
         } else {
-          el.textContent = `OK · ${mode}${iface}`;
-          el.className = "feeder-status ok";
+          _statusEl(el, HEALTH.unknown, "\u2022", "\u2014", f.iface);
         }
       }
+    }
+
+    function renderLocation(status) {
+      const row = document.getElementById("row-location");
+      if (!row) return;
+      row.hidden = false;
+      const home = status.home;
+      // Label keys off hardware + config, not off whether a fix has landed,
+      // so a mobile node reads "Live GPS / Awaiting fix" rather than
+      // silently calling itself static.
+      const live = !!(status.mobile && status.has_gps);
+      document.getElementById("loc-label").textContent = live ? "Live GPS" : "Location";
+      const icon = document.getElementById("loc-icon");
+      icon.firstElementChild.setAttribute("href", live ? "#ic-gps" : "#ic-pin");
+      // setAttribute, not .className: on an SVG element className is a
+      // read-only SVGAnimatedString and assigning to it throws.
+      icon.setAttribute("class", "health-icon " + (live ? "ic-gps" : "ic-loc"));
+      document.getElementById("loc-value").textContent =
+        (home && home.lat != null && home.lon != null)
+          ? `${home.lat.toFixed(4)}, ${home.lon.toFixed(4)}`
+            + (home.elevation_agl_m != null ? ` \u00B7 ${home.elevation_agl_m}m AGL` : "")
+          : (live ? "Awaiting fix\u2026" : "Location not set");
     }
 
     async function refreshStatus() {
@@ -1574,7 +2645,13 @@
         const r = await fetch("/api/status");
         if (!r.ok) return;
         const s = await r.json();
+        // Re-measure the node/browser clock offset every poll, so a node whose
+        // clock is corrected by NTP mid-session stops mis-ageing its
+        // detections without the page needing a reload.
+        setNodeClock(s.now);
         renderFeeders(s.feeders);
+        renderLocation(s);
+        setHeaderStatus(undefined, s.uplink_ok !== false);
         document.getElementById("stat-buffer").textContent =
           `${s.buffer_pct}% (${(s.buffer_bytes / 1e6).toFixed(1)} MB)`;
         document.getElementById("stat-cpu").textContent =
@@ -1586,19 +2663,16 @@
         document.getElementById("stat-version").textContent = s.version;
         if (s.node_id) state.nodeId = s.node_id;
 
-        // Bundle availability — once known, swap to local immediately if
-        // we started in offline mode (we couldn't swap at init because
-        // tilesLocalAvailable was unknown). After the first /api/status,
-        // tileerror-driven fallback also becomes possible.
-        if (s.tiles_local && !state.tilesLocalAvailable) {
-          state.tilesLocalAvailable = true;
-          if (state.tileSource === "local") {
-            // Re-apply the layer now that we know the bundle exists —
-            // initial applyMapTheme() may have rendered an empty layer
-            // if we started offline before this status fetch.
-            applyMapTheme();
-          }
+        // The vector basemap can appear OR disappear: a downloaded pack is
+        // permanent, but the proxied one depends on the node reaching the
+        // tile host. Re-apply on either transition.
+        if (!!s.map_pack !== state.mapPackAvailable || !state.tileLayer) {
+          state.mapPackAvailable = !!s.map_pack;
+          state.mapSource = s.map_source || "none";
+          clearTimeout(state.basemapTimer);
+          applyMapTheme();
         }
+
 
         // Home location may change on mobile nodes as the GPS fix moves.
         // Static nodes: strict equality is fine (config-file source, never
@@ -1628,21 +2702,37 @@
         try { handleEvent(JSON.parse(e.data)); } catch {}
       };
       es.onerror = () => {
-        setHeaderStatus(false);
+        setHeaderStatus(false, undefined);
         // EventSource auto-reconnects; just visually flip to OFFLINE
       };
-      es.onopen = () => setHeaderStatus(true);
+      es.onopen = () => setHeaderStatus(true, undefined);
       state.sse = es;
     }
-    function setHeaderStatus(live) {
-      const pill = document.getElementById("hdr-status");
+    // Two independent things fail here and they mean different things:
+    //   browser -> node   the page has lost this node; nothing on screen can
+    //                     be trusted, including any claim about scanning
+    //   node -> server    the node is offline but STILL DETECTING, which is
+    //                     the whole point of the spool and worth saying out
+    //                     loud rather than showing a bare "offline"
+    function setHeaderStatus(sseUp, uplinkOk) {
+      if (sseUp !== undefined) state.sseUp = sseUp;
+      if (uplinkOk !== undefined) state.uplinkOk = uplinkOk;
+      const pill  = document.getElementById("hdr-status");
       const label = document.getElementById("hdr-status-label");
-      if (live) {
-        pill.classList.remove("offline");
-        label.textContent = "LIVE";
+
+      if (state.sseUp === false) {
+        pill.className = "status-pill offline";
+        label.textContent = "NO CONNECTION";
+        pill.title = "This page cannot reach the node.";
+      } else if (state.uplinkOk === false) {
+        pill.className = "status-pill scanning";
+        label.textContent = "OFFLINE SCANNING";
+        pill.title = "No route to DroneAware. The node is still detecting; "
+                   + "everything it hears is held until the link returns.";
       } else {
-        pill.classList.add("offline");
-        label.textContent = "OFFLINE";
+        pill.className = "status-pill";
+        label.textContent = "LIVE";
+        pill.title = "Detecting and reporting to DroneAware.";
       }
     }
 
@@ -1708,7 +2798,7 @@
       if (!entry) return "<div class='da-popup-inner'>—</div>";
       const evt = entry.event;
       const id = displayId(evt, mac);
-      const ageSec = (Date.now() / 1000) - entry.last_seen;
+      const ageSec = nodeNow() - entry.last_seen;
 
       // Make/model only shown when server-side enrichment has populated
       // these fields (item #9 in v1.4.0 punch list — not yet implemented).
@@ -1753,9 +2843,7 @@
               <div class="da-popup-mac">${escapeHtml(mac)}</div>
             </div>
             <div class="da-popup-thumb" title="Drone image — requires server enrichment">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="currentColor">
-                <path d="M498.1 5.6c10.1 7 15.4 19.1 13.5 31.2l-64 416c-1.5 9.7-7.4 18.2-16 23s-18.9 5.4-28 1.6L284 427.7l-68.5 74.1c-8.9 9.7-22.9 12.9-35.2 8.1S160 493.2 160 480V396.4c0-4 1.5-7.8 4.2-10.7L331.8 202.8c5.8-6.3 5.6-16-.4-22s-15.7-6.4-22-.7L106 360.8 17.7 316.6C7.1 311.3 .3 300.7 0 288.9s5.9-22.8 16.1-28.7l448-256c10.7-6.1 23.9-5.5 34 1.4z"/>
-              </svg>
+              ${BRAND_DRONE_SVG}
             </div>
           </div>
           ${makeModelHTML}
@@ -1766,6 +2854,8 @@
             <div class="da-popup-value">${altTxt || "—"}</div>
             <div class="da-popup-label">Speed</div>
             <div class="da-popup-value">${speedTxt || "—"}</div>
+            <div class="da-popup-label">Heading</div>
+            <div class="da-popup-value">${escapeHtml(headingTxt)}</div>
           </div>
           <div class="da-popup-divider"></div>
           <div class="da-popup-noderow">
@@ -1780,12 +2870,11 @@
               <span class="k">Channel</span><span class="v">${evt.channel ?? "—"}</span>
 ${multiSerialHTML}
               <span class="k">Msg type</span><span class="v">${escapeHtml(evt.type || "—")}</span>
-              <span class="k">Heading</span><span class="v">${escapeHtml(headingTxt)}</span>
               <span class="k">Lat</span><span class="v">${(typeof evt.lat === "number") ? evt.lat.toFixed(6) : "—"}</span>
               <span class="k">Lon</span><span class="v">${(typeof evt.lon === "number") ? evt.lon.toFixed(6) : "—"}</span>
               <span class="k">Op lat</span><span class="v">${(typeof evt.operator_lat === "number") ? evt.operator_lat.toFixed(6) : "—"}</span>
               <span class="k">Op lon</span><span class="v">${(typeof evt.operator_lon === "number") ? evt.operator_lon.toFixed(6) : "—"}</span>
-              <span class="k">First seen</span><span class="v">${relTime((Date.now()/1000) - entry.first_seen)}</span>
+              <span class="k">First seen</span><span class="v">${relTime(nodeNow() - entry.first_seen)}</span>
               <span class="k">Last seen</span><span class="v">${relTime(ageSec)}</span>
               <span class="k">Trail pts</span><span class="v">${entry.trail ? entry.trail.length : 0}</span>
             </div>
@@ -1812,22 +2901,88 @@ ${multiSerialHTML}
     // marker color; the trail's job is to be visually distinct against
     // any basemap so the operator can trace the full flight at a glance.
     // Ignores the `color` argument passed by callers (kept for compat).
-    const TRAIL_COLOR = "#FFD400";
+    // The flight-path colour on droneaware.io/live.html. Kept identical so an
+    // operator reads the same picture on the node and on the website.
+    const TRAIL_COLOR = "#00E5FF";
+    // Hue-code a waypoint by its height within the track's own range: cyan at
+    // the bottom through to red at the top. Copied from live.html so a flight
+    // path reads the same on both surfaces.
+    function altColor(alt, min, max) {
+      if (alt == null || min == null || max == null || min === max) return "#FFD700";
+      const t = Math.max(0, Math.min(1, (alt - min) / (max - min)));
+      return `hsl(${(180 - 150 * t).toFixed(0)}, 70%, 55%)`;
+    }
+
+    // Which points get a dot. Always the first, last and highest; then one per
+    // ~10 s of flight, capped so a long sortie does not bury the line it is
+    // annotating. Mirrors sampleAltitudeWaypoints() in live.html.
+    function sampleAltitudeWaypoints(trail) {
+      const pts = [];
+      for (let i = 0; i < trail.length; i++) {
+        if (typeof trail[i][2] === "number") pts.push({ i, alt: trail[i][2] });
+      }
+      if (!pts.length) return [];
+      let peak = 0;
+      for (let k = 1; k < pts.length; k++) if (pts[k].alt > pts[peak].alt) peak = k;
+      const MAX_DOTS = 60;
+      const step = Math.max(1, Math.ceil(pts.length / MAX_DOTS));
+      const keep = new Set([0, pts.length - 1, peak]);
+      for (let k = 0; k < pts.length; k += step) keep.add(k);
+      return [...keep].sort((a, b) => a - b).map(k => ({
+        lat: trail[pts[k].i][0], lon: trail[pts[k].i][1],
+        alt: pts[k].alt, isPeak: k === peak,
+      }));
+    }
+
     function renderTrailPolyline(entry, _color) {
       if (!entry.trail || entry.trail.length < 2) return;
       if (!entry.polyline) {
+        // Same line as droneaware.io/live.html: thin, cyan, slightly
+        // translucent so it reads as a path over the map rather than a
+        // drawing on top of it.
         entry.polyline = L.polyline(entry.trail, {
-          color: TRAIL_COLOR, weight: 4, opacity: 1.0, interactive: false,
+          color: TRAIL_COLOR, weight: 2, opacity: 0.75, interactive: false,
         }).addTo(state.map);
       } else {
         entry.polyline.setLatLngs(entry.trail);
       }
+      renderTrailWaypoints(entry);
+    }
+
+    // Altitude dots along the path, hue-coded and hoverable. Rebuilt rather
+    // than diffed: a trail grows by a point at a time and the whole track's
+    // min/max can shift with any of them, which recolours every dot.
+    function renderTrailWaypoints(entry) {
+      if (entry.waypoints) {
+        state.map.removeLayer(entry.waypoints);
+        entry.waypoints = null;
+      }
+      const wps = sampleAltitudeWaypoints(entry.trail || []);
+      if (!wps.length) return;
+      const alts = wps.map(w => w.alt);
+      const minA = Math.min(...alts), maxA = Math.max(...alts);
+      const group = L.layerGroup();
+      for (const wp of wps) {
+        const label = formatAltitude({ height_agl: wp.alt }) || `${Math.round(wp.alt)} m`;
+        L.circleMarker([wp.lat, wp.lon], {
+          radius: (wp.isPeak && wps.length > 1) ? 5 : 4,
+          color: "#fff", weight: 1,
+          fillColor: altColor(wp.alt, minA, maxA), fillOpacity: 0.95,
+        }).bindTooltip((wp.isPeak && wps.length > 1) ? `${label} · peak` : label,
+                       { direction: "top", offset: [0, -4] }).addTo(group);
+      }
+      group.addTo(state.map);
+      entry.waypoints = group;
     }
 
     function removeTrailPolyline(entry) {
       if (entry.polyline) {
         state.map.removeLayer(entry.polyline);
         entry.polyline = null;
+      }
+      if (entry.waypoints) {
+        state.map.removeLayer(entry.waypoints);
+        entry.waypoints = null;
       }
     }
 
@@ -1842,7 +2997,7 @@ ${multiSerialHTML}
       if (!entry) return;
       entry.showTrail = !entry.showTrail;
       if (entry.showTrail) {
-        const age = (Date.now() / 1000) - entry.last_seen;
+        const age = nodeNow() - entry.last_seen;
         const f = freshnessFor(age);
         renderTrailPolyline(entry, f.color);
         zoomToTrail(mac);
@@ -1941,13 +3096,61 @@ ${multiSerialHTML}
       document.getElementById("btn-theme").addEventListener("click", toggleTheme);
       document.getElementById("btn-units").addEventListener("click", toggleUnits);
 
-      // Network transitions → swap the basemap source. CartoDB if we're
-      // online (full street-level detail), bundled local tiles when
-      // offline (world overview). These are coarse signals — tileerror
-      // on the active CartoDB layer is the ground-truth fallback (see
-      // applyMapTheme).
-      window.addEventListener("online",  switchToCartoDBTiles);
-      window.addEventListener("offline", switchToLocalTiles);
+      // A network transition changes whether the node can proxy the tile
+      // host, which the next status poll reports authoritatively. Ask
+      // immediately rather than waiting out the poll interval; the browser
+      // being online says nothing about whether the NODE can reach it.
+      window.addEventListener("online",  refreshStatus);
+      window.addEventListener("offline", refreshStatus);
+
+      initReplay();
+
+      // Shut down, behind a confirm. The page it is pressed from will stop
+      // answering, so there is no undo from here — hence the dialog.
+      (function initShutdown() {
+        const back = document.getElementById("confirm-backdrop");
+        const body = document.getElementById("confirm-body");
+        const ok = document.getElementById("confirm-ok");
+        const close = () => { back.hidden = true; };
+        document.getElementById("cfg-shutdown").addEventListener("click", () => {
+          back.hidden = false;
+          ok.disabled = false;
+          ok.textContent = "Shut down";
+        });
+        document.getElementById("confirm-cancel").addEventListener("click", close);
+        back.addEventListener("click", (e) => { if (e.target === back) close(); });
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape" && !back.hidden) close();
+        });
+        ok.addEventListener("click", async () => {
+          ok.disabled = true;
+          ok.textContent = "Shutting down…";
+          try {
+            const r = await fetch("/api/action", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "poweroff" }),
+            });
+            const d = await r.json().catch(() => ({}));
+            if (d.error) {
+              ok.disabled = false;
+              ok.textContent = "Shut down";
+              body.textContent = d.detail
+                || "The node refused the request. Check that the installer's "
+                 + "permission rule is in place.";
+              return;
+            }
+          } catch (e) {
+            // The connection dropping mid-request is the SUCCESS case here —
+            // the node went down before it could answer. Do not report it as
+            // a failure.
+          }
+          body.textContent = "Powering down. Wait for the lights to stop, "
+            + "then it is safe to unplug.";
+          document.querySelector(".confirm-actions").hidden = true;
+          setHeaderStatus && setHeaderStatus("OFFLINE", false);
+        });
+      })();
 
       // Initial snapshot
       try {
@@ -1970,6 +3173,815 @@ ${multiSerialHTML}
         }
       });
     });
+
+    // ── Offline map settings (v1.6.0) ────────────────────────────────────
+    // Every change re-prices the region against the node's real disk. The
+    // Download button is a readout of that, never an invitation to try
+    // something that will fail.
+    const om = {
+      est: null,
+      fmtBytes(b) {
+        if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(1) + " GB";
+        return Math.round(b / 1024 ** 2) + " MB";
+      },
+      open() {
+        document.getElementById("settings-backdrop").classList.add("open");
+        om.refresh();
+        om.fillNode();
+      },
+      close() {
+        document.getElementById("settings-backdrop").classList.remove("open");
+      },
+      showPage(name) {
+        document.querySelectorAll(".settings-tab").forEach(t => {
+          const on = t.dataset.page === name;
+          t.classList.toggle("is-active", on);
+          t.setAttribute("aria-selected", on ? "true" : "false");
+        });
+        document.querySelectorAll(".settings-page").forEach(p => {
+          p.hidden = (p.id !== `page-${name}`);
+        });
+      },
+      async fillNode() { return cfg.load(); },
+      async refresh() {
+        const radius = document.getElementById("om-radius").value;
+        document.getElementById("om-radius-val").textContent = radius;
+        // Always centered on the node. The operator changes where that is
+        // on the Node tab, not here.
+        const url = `/api/offline-map/estimate?radius_km=${encodeURIComponent(radius)}`;
+        let d;
+        try {
+          const r = await fetch(url);
+          d = await r.json();
+        } catch (e) {
+          return om.fail("Could not reach the node to check available space.");
+        }
+        if (d.error) return om.fail(d.detail || "This node does not know where it is.");
+        om.est = d;
+
+        document.getElementById("om-center").textContent =
+          `${d.center.lat.toFixed(5)}, ${d.center.lon.toFixed(5)}`;
+
+        om.render();
+      },
+      render() {
+        const d = om.est; if (!d) return;
+        // Not an estimate any more — pmtiles reports what the archive will
+        // actually be for this location, in about a second and a half.
+        document.getElementById("om-size").textContent  = om.fmtBytes(d.bytes);
+        document.getElementById("om-tiles").textContent =
+          d.tiles ? d.tiles.toLocaleString() : "—";
+        document.getElementById("om-free").textContent  =
+          om.fmtBytes(d.disk.free_bytes);
+
+        const v    = document.getElementById("om-verdict");
+        const mark = document.getElementById("om-mark");
+        const text = document.getElementById("om-verdict-text");
+        const btn  = document.getElementById("om-download");
+
+        if (d.fits) {
+          v.className = "verdict ok"; mark.textContent = "\u2713";
+          text.textContent = `${om.fmtBytes(d.bytes)} for ${d.radius_km} km `
+            + `around this node, leaving `
+            + `${om.fmtBytes(d.disk.free_bytes - d.bytes)} free.`;
+          btn.disabled = false;
+        } else {
+          v.className = "verdict bad"; mark.textContent = "\u2717";
+          text.textContent = `Needs ${om.fmtBytes(d.bytes)} but only `
+            + `${om.fmtBytes(d.disk.usable_bytes)} is free once space is kept `
+            + `for detection logs. Reduce the area.`;
+          btn.disabled = true;
+        }
+      },
+      async download() {
+        const btn = document.getElementById("om-download");
+        const text = document.getElementById("om-verdict-text");
+        const radius = document.getElementById("om-radius").value;
+        btn.disabled = true;
+        const was = btn.textContent;
+        btn.textContent = "Building map\u2026";
+        try {
+          const r = await (await fetch("/api/offline-map/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ radius_km: Number(radius) }),
+          })).json();
+          if (r.error) throw new Error(r.detail || r.error);
+          // The node reports when it is done; extraction is tens of seconds,
+          // not instant, and a spinner that lies about progress is worse
+          // than one that just says it is working.
+          for (let i = 0; i < 240; i++) {
+            await new Promise(res => setTimeout(res, 2000));
+            const st = await (await fetch("/api/offline-map/download")).json();
+            if (!st.running) {
+              if (st.error) throw new Error(st.error);
+              text.textContent = `Offline map ready — ${om.fmtBytes(st.bytes)}. `
+                + `This node can now draw its area with no internet.`;
+              document.getElementById("om-verdict").className = "verdict ok";
+              // The map itself should switch to the new pack immediately.
+              refreshStatus();
+              break;
+            }
+          }
+        } catch (e) {
+          document.getElementById("om-verdict").className = "verdict bad";
+          document.getElementById("om-mark").textContent = "\u2717";
+          text.textContent = `Could not build the map: ${e.message}`;
+        }
+        btn.textContent = was;
+        btn.disabled = false;
+      },
+      fail(msg) {
+        document.getElementById("om-verdict").className = "verdict bad";
+        document.getElementById("om-mark").textContent = "\u2717";
+        document.getElementById("om-verdict-text").textContent = msg;
+        document.getElementById("om-download").disabled = true;
+      },
+    };
+
+    /* ----- Node configuration editor (Node tab) -----
+       Renders from the schema the API returns rather than hardcoding fields
+       here, so adding a setting is a server-side change only. Everything is
+       built with textContent / createElement — config values are echoed back
+       into the page, and innerHTML would make that an injection path. */
+    const cfg = {
+      loaded: null,
+      async load() {
+        const host = document.getElementById("cfg-form");
+        let d;
+        try {
+          d = await (await fetch("/api/config")).json();
+        } catch (e) {
+          host.textContent = "Could not read the node configuration.";
+          return;
+        }
+        if (d.error) {
+          host.textContent = d.detail || "Configuration unavailable.";
+          return;
+        }
+        cfg.loaded = d.values;
+        cfg.specs = {};
+        document.getElementById("cfg-node-id").textContent = d.node_id || "unknown";
+        host.replaceChildren();
+        for (const group of d.schema) {
+          const h = document.createElement("h3");
+          h.className = "cfg-group";
+          h.textContent = group.group;
+          host.appendChild(h);
+          for (const f of group.fields) {
+            cfg.specs[f.key] = f;
+            // A hidden group's keys are owned by its widget, which renders
+            // its own controls and writes the values into hidden inputs.
+            if (group.hidden) continue;
+            host.appendChild(cfg.field(f, d.values[f.key] ?? ""));
+          }
+          if (group.widget === "adapters") await cfg.adapterWidget(host);
+          if (group.widget === "channels") await cfg.channelWidget(host, group.fields);
+          if (group.widget === "defaults") {
+            const bar = document.createElement("div");
+            bar.className = "action-row";
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "btn-inline";
+            b.textContent = "Restore defaults";
+            b.title = "Put this section back to the values the node ships with";
+            b.addEventListener("click", () => {
+              // Fills the fields only — the operator still reviews and
+              // presses Save, same as any other edit.
+              for (const f of group.fields) {
+                if (f.default == null) continue;
+                const el = document.getElementById(`cfg-${f.key}`);
+                if (el) el.value = cfg.toDisplay(f, f.default);
+              }
+              cfg.status(`${group.group} restored to defaults — press `
+                + `"Save changes" to apply.`, false, b);
+            });
+            bar.appendChild(b);
+            host.appendChild(bar);
+          }
+          if (group.widget === "pickmap") {
+            const bar = document.createElement("div");
+            bar.className = "action-row";
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "btn-inline";
+            b.textContent = "Select on map";
+            b.title = "Pick the node's position by tapping the map";
+            b.addEventListener("click", pick.start);
+            bar.appendChild(b);
+            host.appendChild(bar);
+          }
+        }
+        cfg.updateCheck();
+      },
+      // Non-blocking: a node with no internet is the normal case, and the
+      // panel must not stall waiting for GitHub to time out.
+      async updateCheck() {
+        const host = document.getElementById("cfg-form");
+        let d;
+        try {
+          d = await (await fetch("/api/update-check")).json();
+        } catch (e) { return; }
+        const box = document.createElement("div");
+        box.className = "estimate-box";
+        const row = document.createElement("div");
+        row.className = "adapter-row";
+        const txt = document.createElement("div");
+        txt.className = "adapter-name";
+        if (!d.reachable) {
+          txt.textContent = `Firmware ${d.current} — could not reach GitHub to check for updates.`;
+        } else if (d.available) {
+          txt.textContent = `Update available: ${d.latest} (this node runs ${d.current}).`;
+        } else {
+          txt.textContent = `Firmware ${d.current} is up to date.`;
+        }
+        row.appendChild(txt);
+        if (d.available) {
+          row.appendChild(cfg.actionBtn("update", `Install ${d.latest}`,
+            "Download and install the latest release, then restart the feeders."));
+        }
+        box.appendChild(row);
+        const h = document.createElement("h3");
+        h.className = "cfg-group";
+        h.textContent = "Firmware";
+        host.appendChild(h);
+        host.appendChild(box);
+      },
+      // Bytes are stored, megabytes are shown. Nobody reasons about a
+      // buffer in bytes, and the config file has to keep the unit the
+      // feeders already parse.
+      MB: 1048576,
+      toDisplay(f, raw) {
+        if (f.type !== "megabytes" || raw === "" || raw == null) return raw ?? "";
+        const n = Number(raw);
+        return Number.isFinite(n) ? String(Math.round(n / cfg.MB)) : raw;
+      },
+      toStored(f, val) {
+        if (f.type !== "megabytes" || val === "") return val;
+        const n = Number(val);
+        return Number.isFinite(n) ? String(Math.round(n * cfg.MB)) : val;
+      },
+      field(f, value) {
+        const wrap = document.createElement("div");
+        wrap.className = "field";
+        const label = document.createElement("label");
+        label.setAttribute("for", `cfg-${f.key}`);
+
+        const name = document.createElement("span");
+        name.textContent = f.label;
+        label.appendChild(name);
+
+        // "i" toggles the explanation rather than showing it always — seven
+        // paragraphs of scanning theory open by default would bury the
+        // controls they describe.
+        if (f.info) {
+          const i = document.createElement("button");
+          i.type = "button";
+          i.className = "cfg-info-btn";
+          i.textContent = "i";
+          i.setAttribute("aria-label", `What is ${f.label}?`);
+          i.setAttribute("aria-expanded", "false");
+          name.appendChild(i);
+        }
+        if (f.unit) {
+          const b = document.createElement("b");
+          b.textContent = f.unit;
+          label.appendChild(b);
+        }
+        wrap.appendChild(label);
+
+        if (f.info) {
+          const box = document.createElement("p");
+          box.className = "cfg-info";
+          box.textContent = f.info;
+          box.hidden = true;
+          wrap.appendChild(box);
+          label.querySelector(".cfg-info-btn").addEventListener("click", (e) => {
+            e.preventDefault();
+            box.hidden = !box.hidden;
+            e.target.setAttribute("aria-expanded", box.hidden ? "false" : "true");
+            e.target.classList.toggle("is-open", !box.hidden);
+          });
+        }
+
+        let input;
+        if (f.type === "bool") {
+          input = document.createElement("select");
+          for (const v of ["true", "false"]) {
+            const o = document.createElement("option");
+            o.value = v;
+            o.textContent = v === "true" ? "On" : "Off";
+            input.appendChild(o);
+          }
+          input.value = String(value).toLowerCase() === "true" ? "true" : "false";
+        } else {
+          input = document.createElement("input");
+          input.type = (f.type === "number" || f.type === "megabytes")
+            ? "number" : "text";
+          input.value = cfg.toDisplay(f, value);
+          if (f.placeholder) input.placeholder = f.placeholder;
+        }
+        input.id = `cfg-${f.key}`;
+        input.className = "cfg-input";
+        input.dataset.key = f.key;
+        wrap.appendChild(input);
+
+        if (f.help) {
+          const p = document.createElement("p");
+          p.className = "cfg-help";
+          p.textContent = f.help;
+          wrap.appendChild(p);
+        }
+        return wrap;
+      },
+      // Which channels the radios visit. These four keys have always worked
+      // in config.env; this is a front end for them, not a new mechanism.
+      //
+      // Presets first, grid behind a disclosure. The honest default answer to
+      // "which channels should I scan" is "all of them" — every time we have
+      // narrowed the plan on reasoning rather than evidence it has cost us
+      // aircraft — so choosing a subset should feel like leaving the default
+      // behind rather than like filling in a form.
+      async channelWidget(host, fields) {
+        // Hidden inputs carry the actual values. cfg.save() collects from
+        // [data-key], so the widget writes into these and the ordinary save
+        // path applies them with no special case.
+        const held = {};
+        for (const f of fields) {
+          const i = document.createElement("input");
+          i.type = "hidden";
+          i.id = `cfg-${f.key}`;
+          i.dataset.key = f.key;
+          i.value = cfg.loaded[f.key] ?? "";
+          host.appendChild(i);
+          held[f.key] = i;
+        }
+
+        const box = document.createElement("div");
+        box.className = "estimate-box";
+        host.appendChild(box);
+
+        let d;
+        try {
+          d = await (await fetch("/api/channels")).json();
+        } catch (e) {
+          box.textContent = "Could not read the radios' channel support.";
+          return;
+        }
+
+        const isTwo = c => c <= 14;
+        const def = d.defaults;
+        // A channel this node's radios cannot tune to must never show as
+        // selected. The feeder filters the plan against the PHY regardless,
+        // so leaving ch13 ticked on a US card would claim coverage the node
+        // does not have — and because the box is disabled, the operator
+        // cannot untick it either. Empty `supported` means the probe failed,
+        // in which case everything is offered, matching the feeder's own
+        // fallback to the unfiltered list.
+        const usable = c => !d.supported.length || d.supported.includes(c);
+        // Empty means "use the built-in list", so resolve to what the feeder
+        // will actually visit. Showing a blank grid for the default setting
+        // would be a lie about what the node is doing.
+        const parse = (raw, fallback) => {
+          const v = String(raw ?? "").trim().toLowerCase();
+          if (!v) return fallback.slice();
+          if (v === "none" || v === "off") return [];
+          return v.split(",").map(x => parseInt(x, 10)).filter(n => !isNaN(n));
+        };
+        const only = list => list.filter(usable);
+        const state = {
+          two: only(parse(cfg.loaded.WIFI_EXPLORE_2G, def.explore_2g)),
+          five: only(parse(cfg.loaded.WIFI_EXPLORE_5G, def.explore_5g)),
+          hold2: String(cfg.loaded.WIFI_SOCIAL_2G_CHANNEL ?? def.social_2g) !== "0",
+          hold5: String(cfg.loaded.WIFI_SOCIAL_5G_CHANNEL ?? def.social_5g) !== "0",
+        };
+
+        const PRESETS = [
+          { id: "both", label: "Both bands",
+            note: "Sweeps 2.4 and 5 GHz, resting longer on ch6 and ch149. "
+                + "This is what the node ships with.",
+            apply: () => ({ two: only(def.explore_2g), five: only(def.explore_5g),
+                            hold2: true, hold5: usable(149) }) },
+          { id: "5g", label: "5 GHz priority, hold ch6",
+            note: "Sweeps all of 5 GHz. On 2.4 the radio stays on ch6 instead "
+                + "of sweeping, so nothing on ch1-13 is heard.",
+            apply: () => ({ two: [], five: only(def.explore_5g),
+                            hold2: true, hold5: usable(149) }) },
+          { id: "2g", label: "2.4 GHz only",
+            note: "Sweeps 2.4 GHz and ignores 5 GHz entirely.",
+            apply: () => ({ two: only(def.explore_2g), five: [],
+                            hold2: true, hold5: false }) },
+        ];
+
+        const same = (a, b) => a.length === b.length
+          && a.slice().sort((x, y) => x - y).join() === b.slice().sort((x, y) => x - y).join();
+        const match = () => {
+          for (const p of PRESETS) {
+            const w = p.apply();
+            if (same(state.two, w.two) && same(state.five, w.five)
+                && state.hold2 === w.hold2 && state.hold5 === w.hold5) return p.id;
+          }
+          return "custom";
+        };
+
+        // --- presets -------------------------------------------------------
+        const radios = {};
+        for (const p of PRESETS.concat([{ id: "custom", label: "Custom",
+              note: "Whatever is ticked below." }])) {
+          const row = document.createElement("label");
+          row.className = "chan-preset";
+          const r = document.createElement("input");
+          r.type = "radio";
+          r.name = "chan-preset";
+          r.value = p.id;
+          radios[p.id] = r;
+          r.addEventListener("change", () => {
+            if (p.id === "custom") { adv.open = true; return; }
+            Object.assign(state, p.apply());
+            render();
+          });
+          row.appendChild(r);
+          const t = document.createElement("span");
+          const strong = document.createElement("strong");
+          strong.textContent = p.label;
+          t.appendChild(strong);
+          const n = document.createElement("span");
+          n.className = "chan-note";
+          n.textContent = p.note;
+          t.appendChild(n);
+          row.appendChild(t);
+          box.appendChild(row);
+        }
+
+        // --- advanced grid --------------------------------------------------
+        const adv = document.createElement("details");
+        adv.className = "chan-advanced";
+        const sum = document.createElement("summary");
+        sum.textContent = "Advanced — choose channels individually";
+        adv.appendChild(sum);
+
+        const warn = document.createElement("p");
+        warn.className = "chan-warning";
+        warn.textContent =
+          "Narrowing the scan loses aircraft, and not always the ones you "
+          + "expect. Remote ID beacons move between channels mid-flight — we "
+          + "have recorded 165 to 153 and 56 to 165 on separate flights — so a "
+          + "channel that is quiet now is not one you can rule out. Radar "
+          + "(DFS) channels turned out to carry real traffic after two "
+          + "releases of leaving them out, and the 2.4 sweep past ch6 exists "
+          + "because a Parrot ANAFI was found on ch5. Unless you are chasing a "
+          + "known aircraft, scan everything.";
+        adv.appendChild(warn);
+
+        const grids = [];
+        for (const band of d.bands) {
+          const g = document.createElement("div");
+          g.className = "chan-band";
+          const h = document.createElement("div");
+          h.className = "chan-band-name";
+          h.textContent = band.band;
+          g.appendChild(h);
+          const row = document.createElement("div");
+          row.className = "chan-grid";
+          for (const ch of band.channels) {
+            // Empty `supported` means the probe failed, not that the radio
+            // supports nothing — the feeder scans the full list unfiltered in
+            // that same case, so the grid must not grey everything out.
+            const ok = !d.supported.length || d.supported.includes(ch);
+            const cell = document.createElement("label");
+            cell.className = "chan-cell" + (ok ? "" : " chan-unsupported");
+            if (!ok) cell.title = "No radio on this node can tune to this channel";
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.dataset.ch = String(ch);
+            cb.disabled = !ok;
+            cb.addEventListener("change", () => {
+              const list = isTwo(ch) ? state.two : state.five;
+              const at = list.indexOf(ch);
+              if (cb.checked && at < 0) list.push(ch);
+              if (!cb.checked && at >= 0) list.splice(at, 1);
+              if (ch === band.social) {
+                if (isTwo(ch)) state.hold2 = cb.checked;
+                else state.hold5 = cb.checked;
+              }
+              render();
+            });
+            cell.appendChild(cb);
+            const t = document.createElement("span");
+            t.textContent = String(ch);
+            cell.appendChild(t);
+            if (ch === band.social) {
+              const b = document.createElement("em");
+              b.className = "chan-held";
+              b.textContent = "held";
+              b.title = "Aircraft on this channel beacon only once a second, "
+                + "so the radio rests here longer than on the others";
+              cell.appendChild(b);
+            }
+            row.appendChild(cell);
+            grids.push(cb);
+          }
+          g.appendChild(row);
+          adv.appendChild(g);
+        }
+        box.appendChild(adv);
+
+        const count = document.createElement("p");
+        count.className = "chan-count";
+        box.appendChild(count);
+
+        // --- reflect state into the DOM and the hidden inputs ---------------
+        function render() {
+          const id = match();
+          for (const k in radios) radios[k].checked = (k === id);
+          for (const cb of grids) {
+            const ch = parseInt(cb.dataset.ch, 10);
+            cb.checked = (isTwo(ch) ? state.two : state.five).includes(ch);
+          }
+          // An explicit list, always — "" would mean "use the built-in list"
+          // and would silently re-add channels the operator just unticked.
+          held.WIFI_EXPLORE_2G.value = state.two.length
+            ? state.two.slice().sort((a, b) => a - b).join(",") : "none";
+          held.WIFI_EXPLORE_5G.value = state.five.length
+            ? state.five.slice().sort((a, b) => a - b).join(",") : "none";
+          held.WIFI_SOCIAL_2G_CHANNEL.value = state.hold2 ? "6" : "0";
+          held.WIFI_SOCIAL_5G_CHANNEL.value = state.hold5 ? "149" : "0";
+
+          const n = state.two.length + state.five.length;
+          if (!n) {
+            // The feeder recovers from this by falling back to the built-in
+            // plan, so it cannot go deaf — but silently doing the opposite of
+            // what was asked is worse than refusing here.
+            count.textContent = "No channels selected. The node cannot scan "
+              + "nothing — pick at least one, or stop the WiFi service if you "
+              + "want scanning off.";
+            count.classList.add("chan-empty");
+          } else {
+            count.textContent = `${n} channel${n === 1 ? "" : "s"} selected`
+              + (id === "custom" ? " (custom)" : "");
+            count.classList.remove("chan-empty");
+          }
+          const save = document.getElementById("cfg-save");
+          if (save) save.disabled = !n;
+        }
+        if (match() === "custom") adv.open = true;
+        render();
+      },
+      // Live hardware instead of two MAC text boxes. The roles are owned by
+      // the node's orchestration, so the only honest controls here are the
+      // ones that ask it to redo the assignment.
+      async adapterWidget(host) {
+        const box = document.createElement("div");
+        box.className = "estimate-box";
+        host.appendChild(box);
+        let d;
+        try {
+          d = await (await fetch("/api/adapters")).json();
+        } catch (e) {
+          box.textContent = "Could not read WiFi hardware.";
+          return;
+        }
+        for (const a of d.adapters) {
+          const row = document.createElement("div");
+          row.className = "adapter-row";
+
+          const left = document.createElement("div");
+          const nm = document.createElement("div");
+          nm.className = "adapter-name";
+          nm.textContent = a.name;
+          const meta = document.createElement("div");
+          meta.className = "adapter-meta mono";
+          // Retune last, so it reads as the notable fact rather than more
+          // hardware trivia. It is what decides which adapter should sweep.
+          meta.textContent = [a.iface, a.mac, a.driver,
+                              a.retune_ms ? `${a.retune_ms}ms retune` : null]
+            .filter(Boolean).join("  ·  ");
+          left.appendChild(nm);
+          left.appendChild(meta);
+
+          const role = document.createElement("span");
+          role.className = "adapter-role" + (a.onboard ? " is-onboard" : "");
+          role.textContent = a.role;
+
+          row.appendChild(left);
+          row.appendChild(role);
+          box.appendChild(row);
+        }
+
+        // The 5 GHz adapter sweeps ~20 channels a cycle; the 2.4 one mostly
+        // holds ch6. So the faster radio belongs on 5 GHz, and when it is
+        // not, say so rather than leaving the operator to compare numbers.
+        const byRole = {};
+        for (const a of d.adapters) if (a.retune_ms) byRole[a.role] = a;
+        const fast = byRole["2.4 GHz"], slow = byRole["5 GHz"];
+        if (fast && slow && fast.retune_ms < slow.retune_ms) {
+          const hint = document.createElement("p");
+          hint.className = "cfg-help";
+          hint.textContent =
+            `The 5 GHz adapter takes ${slow.retune_ms}ms to change channel `
+            + `against ${fast.retune_ms}ms for the 2.4 GHz one, and 5 GHz `
+            + `sweeps far more. Swapping them would spend less time deaf.`;
+          host.appendChild(hint);
+        }
+
+        const bar = document.createElement("div");
+        bar.className = "action-row";
+        bar.appendChild(cfg.actionBtn("swap", "Swap 2.4 / 5 GHz",
+          "Exchange which adapter handles which band."));
+        bar.appendChild(cfg.actionBtn("refresh", "Refresh hardware",
+          "Re-detect adapters and reassign roles."));
+        host.appendChild(bar);
+      },
+      actionBtn(action, text, title) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn-inline";
+        b.textContent = text;
+        b.title = title;
+        b.addEventListener("click", () => cfg.runAction(action, b));
+        return b;
+      },
+      async runAction(action, btn) {
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Working…";
+        let ok = false, message = "";
+        try {
+          const r = await (await fetch("/api/action", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action }),
+          })).json();
+          if (r.error) throw new Error(r.detail || r.error);
+          // The CLI restarts feeders, so poll rather than guess a duration.
+          for (let i = 0; i < 180; i++) {
+            await new Promise(res => setTimeout(res, 1000));
+            const s = await (await fetch("/api/action")).json();
+            if (!s.running && s.last) {
+              ok = s.last.ok;
+              message = ok ? `${action} completed.` : s.last.detail;
+              break;
+            }
+          }
+          if (!message) message = `${action} is still running.`;
+        } catch (e) {
+          message = `${action} failed: ${e.message}`;
+        }
+        btn.disabled = false;
+        btn.textContent = label;
+
+        // Only re-read on success — a reload rebuilds the form and would
+        // throw away the failure text the operator has to act on. On
+        // success the button is a new node, so find it again by its label.
+        let anchor = btn;
+        if (ok) {
+          await cfg.load();
+          anchor = [...document.querySelectorAll("#cfg-form .btn-inline")]
+            .find(b => b.textContent === label) || null;
+        }
+        cfg.status(message, !ok, anchor);
+      },
+      async save() {
+        if (!cfg.loaded) return;
+        // Send only what actually changed, so a save cannot rewrite a key
+        // the operator never touched.
+        const values = {};
+        document.querySelectorAll("#cfg-form [data-key]").forEach(el => {
+          const key = el.dataset.key;
+          // Compare in STORED units, not displayed ones — a megabytes field
+          // shows 50 for 52428800 and would otherwise look changed every time.
+          const stored = cfg.toStored(cfg.specs[key] || {}, el.value);
+          if (stored !== (cfg.loaded[key] ?? "")) values[key] = stored;
+        });
+        if (!Object.keys(values).length) {
+          return cfg.status("Nothing changed.", false);
+        }
+        let d;
+        try {
+          d = await (await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ values }),
+          })).json();
+        } catch (e) {
+          return cfg.status("Could not reach the node.", true);
+        }
+        if (d.error) {
+          return cfg.status(d.detail || `Rejected: ${d.error}`, true);
+        }
+        Object.assign(cfg.loaded, values);
+        cfg.status(
+          `Saved ${d.written.length} setting${d.written.length === 1 ? "" : "s"}. `
+          + `Run "sudo droneaware refresh" on the node to apply.`, false);
+      },
+      // `anchor` is the control that caused the message. The status box is
+      // MOVED next to it rather than living at the bottom of the panel — a
+      // swap failure printed below a long scrolling form is a failure the
+      // operator never sees.
+      status(text, bad, anchor) {
+        // Built fresh each time rather than moving one element around the
+        // DOM: the anchor lives inside #cfg-form, and cfg.load()'s
+        // replaceChildren() would delete a relocated singleton outright —
+        // after which every later status call throws on a null node.
+        document.querySelectorAll(".cfg-status").forEach(e => e.remove());
+        const box = document.createElement("div");
+        box.className = "estimate-box cfg-status" + (bad ? " is-error" : "");
+        const verdict = document.createElement("div");
+        verdict.className = "verdict";
+        const mark = document.createElement("span");
+        mark.className = "mark";
+        mark.textContent = bad ? "!" : "✓";
+        const body = document.createElement("span");
+        body.className = "cfg-status-text";
+        body.textContent = text;
+        verdict.appendChild(mark);
+        verdict.appendChild(body);
+        box.appendChild(verdict);
+
+        if (anchor && anchor.isConnected) {
+          (anchor.closest(".action-row") || anchor).after(box);
+        } else {
+          document.getElementById("cfg-save").before(box);
+        }
+        box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      },
+    };
+
+    /* ----- Pick the node's location by tapping the map -----
+       Typing coordinates is the worst possible input method on a
+       touchscreen, and operators have built touchscreen node displays. The
+       panel collapses to a bar so the map underneath stays tappable; the
+       backdrop stops swallowing clicks while this is active. */
+    const pick = {
+      lat: null, lon: null, marker: null,
+      start() {
+        pick.lat = pick.lon = null;
+        document.getElementById("pick-coords").textContent = "nothing selected yet";
+        document.getElementById("pick-update").disabled = true;
+        document.getElementById("settings-backdrop").classList.add("picking");
+        state.map.on("click", pick.onMap);
+        state.map.getContainer().style.cursor = "crosshair";
+      },
+      onMap(e) {
+        pick.lat = e.latlng.lat;
+        pick.lon = e.latlng.lng;
+        document.getElementById("pick-coords").textContent =
+          `${pick.lat.toFixed(5)}, ${pick.lon.toFixed(5)}`;
+        document.getElementById("pick-update").disabled = false;
+        if (pick.marker) state.map.removeLayer(pick.marker);
+        pick.marker = L.circleMarker(e.latlng, {
+          radius: 8, color: ringStyle().color, weight: 2,
+          fillColor: ringStyle().color, fillOpacity: 0.35,
+        }).addTo(state.map);
+      },
+      stop() {
+        state.map.off("click", pick.onMap);
+        state.map.getContainer().style.cursor = "";
+        if (pick.marker) { state.map.removeLayer(pick.marker); pick.marker = null; }
+        document.getElementById("settings-backdrop").classList.remove("picking");
+      },
+      apply() {
+        if (pick.lat == null) return;
+        // Fills the fields but does NOT save — the operator still reviews
+        // and presses Save, same as a typed edit.
+        const la = document.getElementById("cfg-NODE_LAT");
+        const lo = document.getElementById("cfg-NODE_LON");
+        if (la) la.value = pick.lat.toFixed(6);
+        if (lo) lo.value = pick.lon.toFixed(6);
+        pick.stop();
+        om.showPage("node");
+      },
+      get active() {
+        return document.getElementById("settings-backdrop")
+                       .classList.contains("picking");
+      },
+    };
+
+    document.getElementById("pick-cancel").addEventListener("click", pick.stop);
+    document.getElementById("pick-update").addEventListener("click", pick.apply);
+    document.getElementById("cfg-save").addEventListener("click", cfg.save);
+    document.getElementById("btn-settings").addEventListener("click", om.open);
+    document.getElementById("settings-close").addEventListener("click", om.close);
+    document.getElementById("settings-backdrop").addEventListener("click", (e) => {
+      if (e.target.id === "settings-backdrop") om.close();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      // While picking, Escape backs out of the pick — not out of Settings
+      // entirely, which would discard the edits they came here to make.
+      if (pick.active) pick.stop(); else om.close();
+    });
+    document.querySelectorAll(".settings-tab").forEach(t =>
+      t.addEventListener("click", () => om.showPage(t.dataset.page)));
+    document.getElementById("om-download").addEventListener("click", om.download);
+    document.getElementById("om-radius").addEventListener("input", om.refresh);
+    document.getElementById("om-edit-center").addEventListener("click", () => {
+      om.showPage("node");
+      // Draw the eye to the field they came here to change.
+      const el = document.getElementById("cfg-NODE_LAT");
+      if (el) { el.focus(); el.select && el.select(); }
+    });
+
   </script>
 </body>
 </html>

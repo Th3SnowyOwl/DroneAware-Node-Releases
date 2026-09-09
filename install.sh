@@ -587,6 +587,103 @@ _check_undervoltage() {
     warn "Continuing on an under-volted Pi at operator request."
 }
 
+# ---------------------------------------------------------------------------
+# apt progress
+#
+# apt on a fresh image can run for several minutes. Both calls below hide
+# stdout, so the installer looked frozen at "Installing System Packages" —
+# indistinguishable from a hung Pi, and abandoning the install there is the
+# worst possible moment for it.
+#
+# apt can report machine-readable progress on a chosen fd (APT::Status-Fd),
+# emitting `pmstatus:<pkg>:<percent>:<description>`, so this is a real
+# percentage rather than a spinner pretending to be one.
+# ---------------------------------------------------------------------------
+
+# Another package manager holding the lock is the single most common cause
+# of a long stall — unattended-upgrades runs automatically for the first few
+# minutes after a Pi's first boot. Say so instead of appearing hung.
+_wait_apt_lock() {
+    local waited=0
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+       || fuser /var/lib/apt/lists/lock  >/dev/null 2>&1; do
+        if [ "$waited" = "0" ]; then
+            echo "  Another package manager is running (this is normal on a"
+            echo "  freshly imaged Pi). Waiting for it to finish..."
+        fi
+        sleep 5
+        waited=$(( waited + 5 ))
+        if [ "$waited" -ge 300 ]; then
+            warn "Still locked after 5 minutes — continuing anyway."
+            return 0
+        fi
+        printf '\r  waited %ss   ' "$waited"
+    done
+    [ "$waited" -gt 0 ] && printf '\r  Lock released after %ss.        \n' "$waited"
+    return 0
+}
+
+_apt_bar() {
+    local label="$1" pct="$2" secs="$3" width=28
+    local filled=$(( pct * width / 100 ))
+    [ "$filled" -gt "$width" ] && filled=$width
+    [ "$filled" -lt 0 ] && filled=0
+    local mins=$(( secs / 60 )) rem=$(( secs % 60 )) elapsed
+    if [ "$mins" -gt 0 ]; then elapsed="${mins}m${rem}s"; else elapsed="${rem}s"; fi
+    printf '\r  %-24s [' "$label"
+    [ "$filled" -gt 0 ] && printf '%0.s#' $(seq 1 "$filled")
+    [ "$(( width - filled ))" -gt 0 ] && printf '%0.s.' $(seq 1 "$(( width - filled ))")
+    printf '] %3d%%  %-7s' "$pct" "$elapsed"
+}
+
+# _apt_run "Label" <apt-get args...>
+_apt_run() {
+    local label="$1"; shift
+    local status rc err tty=0
+    [ -t 1 ] && tty=1
+    status=$(mktemp); rc=$(mktemp); err=$(mktemp)
+
+    (
+        # noninteractive is load-bearing, not tidiness: stdout is suppressed
+        # here, so a debconf prompt would block forever behind a hidden
+        # question with nothing on screen to explain the hang.
+        DEBIAN_FRONTEND=noninteractive \
+        apt-get -o APT::Status-Fd=3 -o Dpkg::Use-Pty=0 "$@" \
+            >/dev/null 2>"$err" 3>"$status"
+        echo $? >"$rc"
+    ) &
+    local pid=$! start=$SECONDS last=0 shown=-1
+    while kill -0 "$pid" 2>/dev/null; do
+        local pct
+        pct=$(grep -aoE '^(pmstatus|dlstatus):[^:]*:[0-9.]+' "$status" 2>/dev/null \
+              | tail -1 | awk -F: '{printf "%d", $3}')
+        [ -n "${pct:-}" ] && last="$pct"
+        if [ "$tty" = "1" ]; then
+            _apt_bar "$label" "$last" "$(( SECONDS - start ))"
+        elif [ "$last" != "$shown" ] && [ $(( last % 20 )) -eq 0 ]; then
+            # Not a terminal (piped to a log): one line per 20%, not 3/sec.
+            printf '  %s %d%%\n' "$label" "$last"
+            shown="$last"
+        fi
+        sleep 0.4
+    done
+    wait "$pid" 2>/dev/null
+    local code; code=$(cat "$rc" 2>/dev/null || echo 1)
+
+    if [ "$code" = "0" ]; then
+        if [ "$tty" = "1" ]; then
+            _apt_bar "$label" 100 "$(( SECONDS - start ))"; printf '\n'
+        else
+            printf '  %s done (%ss)\n' "$label" "$(( SECONDS - start ))"
+        fi
+    else
+        [ "$tty" = "1" ] && printf '\n'
+        cat "$err" >&2
+    fi
+    rm -f "$status" "$rc" "$err"
+    return "$code"
+}
+
 install_packages() {
     heading "Installing System Packages"
 
@@ -631,15 +728,15 @@ install_packages() {
         fatal "Re-run this installer once the above is resolved."
     }
 
-    apt-get update -qq || _apt_failed
+    _wait_apt_lock
+    _apt_run "Reading package lists" update -qq || _apt_failed
     # gpsd-clients gives us `gpsctl` for the GPS protocol auto-fix
     # (SiRF/UBX → NMEA). --no-install-recommends is important: without it
     # apt pulls gpsd itself, which would seize the GPS port and prevent
     # DroneAware from reading it. gpsd-clients works standalone in the
     # `gpsctl -f -n /dev/xxx` direct-to-device mode we use.
-    apt-get install -y --no-install-recommends \
-        bluez bluetooth iw rfkill curl gpsd-clients \
-        > /dev/null || _apt_failed
+    _apt_run "Installing packages" install -y --no-install-recommends \
+        bluez bluetooth iw rfkill curl gpsd-clients || _apt_failed
     # Non-fatal: a node with no Bluetooth hardware can still run the WiFi
     # feeder. Pre-v1.5.0.6 these were bare commands under `set -e`, so a
     # masked or absent bluetooth unit aborted the whole install silently.
@@ -973,6 +1070,31 @@ FLUSH_INTERVAL=5.0
 DRONEAWARE_BUFFER_MAX_BYTES=50000000
 DRONEAWARE_BUFFER_WARN_PCT=75
 
+# ─── Local Detection Database (this node's own flight history) ───
+# Detections are written to disk before they are uploaded, so nothing is lost
+# to a power cut, a reboot, an update, or carrying the node home in a vehicle.
+# The spool is also the node's own record: uploading a detection does NOT
+# delete it.
+#
+# RETENTION_DAYS   how long to keep detections locally after they have been
+#                  uploaded. Set to "never" to keep them indefinitely. A
+#                  detection that has NOT been uploaded is kept regardless of
+#                  this setting.
+# MAX_GB           hard ceiling on the history, whatever RETENTION_DAYS says.
+#                  This is the backstop for a spoof flood, where a node can be
+#                  fed detections far faster than it will ever see legitimately
+#                  and would otherwise fill the card in the name of retention.
+#                  Uploaded history is discarded first; the node never stops
+#                  recording to stay under it.
+# WRITE_INTERVAL   how often staged detections are written to disk. This is the
+#                  worst-case loss window on a power cut, and nothing else —
+#                  the same number of bytes reaches the card at any interval,
+#                  because each detection is written exactly once.
+DRONEAWARE_SPOOL_DIR=/var/lib/droneaware/spool
+DRONEAWARE_SPOOL_RETENTION_DAYS=90
+DRONEAWARE_SPOOL_MAX_GB=4
+DRONEAWARE_SPOOL_WRITE_INTERVAL_SEC=15.0
+
 # LocalPublisher buffer cap. Bytes-based cap for the tmpfs ring buffer
 # that surfaces detections to LAN consumers (operators tailing
 # 'nc -luk 9999', droneaware test, future local web UI). Distinct from
@@ -1268,6 +1390,27 @@ install_webui() {
     ln -sf "${INSTALL_DIR}/web_ui" /usr/local/bin/web_ui 2>/dev/null || true
     info "web_ui binary → ${INSTALL_DIR}/web_ui"
 
+    # pmtiles — used by the Web UI to build an offline map of the node's own
+    # area. Non-fatal: without it the map still works from the tile host and
+    # the bundled world pack, it just cannot build a local detail pack.
+    echo "    Installing pmtiles (offline map builder)..."
+    if [[ "$LOCAL_INSTALL" == "1" ]]; then
+        cp "${LOCAL_DIST}/pmtiles" "${INSTALL_DIR}/pmtiles" 2>/dev/null \
+            && cp "${LOCAL_DIST}/pmtiles.LICENSE" "${INSTALL_DIR}/" 2>/dev/null \
+            && chmod +x "${INSTALL_DIR}/pmtiles" \
+            && info "pmtiles → ${INSTALL_DIR}/pmtiles" \
+            || warn "pmtiles not installed — offline map downloads unavailable."
+    elif curl -fsSL --retry 3 "${base_url}/pmtiles" -o "${INSTALL_DIR}/pmtiles"; then
+        chmod +x "${INSTALL_DIR}/pmtiles"
+        # BSD-3-Clause requires the notice to accompany the binary.
+        curl -fsSL --retry 2 "${base_url}/pmtiles.LICENSE" \
+             -o "${INSTALL_DIR}/pmtiles.LICENSE" 2>/dev/null || true
+        info "pmtiles → ${INSTALL_DIR}/pmtiles"
+    else
+        rm -f "${INSTALL_DIR}/pmtiles"
+        warn "pmtiles download failed — offline map downloads unavailable."
+    fi
+
     echo "    Installing systemd unit..."
     if [[ "$LOCAL_INSTALL" == "1" ]]; then
         cp "${local_root}/droneaware-web.service" /etc/systemd/system/droneaware-web.service
@@ -1281,6 +1424,30 @@ install_webui() {
         fi
     fi
 
+    # Let the Web UI run the three operator actions its settings panel
+    # offers. Written to a temp file and validated with `visudo -c` BEFORE
+    # being installed: a malformed file in /etc/sudoers.d locks sudo out
+    # entirely, and this runs on a node the operator may only reach by SSH.
+    #
+    # Commands are exact-match WITH their arguments. Granting bare
+    # /usr/local/bin/droneaware would also grant `uninstall`.
+    _sudoers_tmp="$(mktemp)"
+    cat > "$_sudoers_tmp" <<'SUDOERS'
+droneaware ALL=(root) NOPASSWD: /usr/local/bin/droneaware refresh
+droneaware ALL=(root) NOPASSWD: /usr/local/bin/droneaware swap
+droneaware ALL=(root) NOPASSWD: /usr/local/bin/droneaware update
+droneaware ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff
+SUDOERS
+    if visudo -c -f "$_sudoers_tmp" >/dev/null 2>&1; then
+        install -m 0440 -o root -g root "$_sudoers_tmp" \
+            /etc/sudoers.d/droneaware-webui
+        info "Web UI may run refresh / swap / update / shut down."
+    else
+        warn "sudoers rule failed validation — Refresh, Swap, Install and"
+        warn "Shut Down buttons in the Web UI will not work. Nothing was changed."
+    fi
+    rm -f "$_sudoers_tmp"
+
     # Ensure droneaware user exists for User=droneaware in the unit.
     # The Pi OS imager typically creates a 'droneaware' user during initial
     # setup, but operators who picked a different username need it created
@@ -1290,6 +1457,31 @@ install_webui() {
         info "Created droneaware system user for Web UI."
     fi
     chown droneaware:droneaware "${INSTALL_DIR}/web_ui" 2>/dev/null || true
+
+    # Offline basemap. 15 MB, zoom 0-5, global — what the map can still draw
+    # with no internet at all. Non-fatal: the UI works without it, drawing
+    # from the tile host while online, so a failed download must not abort
+    # the Web UI install.
+    echo "    Downloading offline basemap (15 MB)..."
+    if curl -fsSL --retry 3 --max-time 300 \
+            "https://tiles.droneaware.io/world.pmtiles" \
+            -o "${INSTALL_DIR}/world.pmtiles.part"; then
+        # Verify before it becomes the live pack — a truncated file or an
+        # error page renamed into place renders a blank map with nothing to
+        # explain it.
+        if [[ "$(head -c 7 "${INSTALL_DIR}/world.pmtiles.part")" == "PMTiles" ]]; then
+            mv "${INSTALL_DIR}/world.pmtiles.part" "${INSTALL_DIR}/world.pmtiles"
+            chown droneaware:droneaware "${INSTALL_DIR}/world.pmtiles" 2>/dev/null || true
+            info "Offline basemap → ${INSTALL_DIR}/world.pmtiles"
+        else
+            rm -f "${INSTALL_DIR}/world.pmtiles.part"
+            warn "Offline basemap failed verification — the map will need internet."
+        fi
+    else
+        rm -f "${INSTALL_DIR}/world.pmtiles.part"
+        warn "Offline basemap download failed — the map will need internet."
+        warn "Retry later with: sudo droneaware install-webui"
+    fi
 
     # Bump LocalPublisher buffer to match the Web UI's 50 MB cap; add
     # DRONEAWARE_WEB_PORT if not already present.
